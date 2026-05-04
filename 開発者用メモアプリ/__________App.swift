@@ -1,13 +1,15 @@
-//___FILEHEADER___
-
 import SwiftUI
 import SwiftData
 
 @main
-struct ___PACKAGENAME:identifier___App: App {
+struct KatachiApp: App {
+    init() {
+        FirebaseBootstrap.configureIfPossible()
+    }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Idea.self
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
