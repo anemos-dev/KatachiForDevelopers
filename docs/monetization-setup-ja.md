@@ -18,17 +18,29 @@ App Store ConnectのIn-App Purchase / Subscriptionsには、アプリ内の `Bil
 
 App Store上のアプリ名は `Katachi for Developers`、ホーム画面表示名は `Katachi` とする。将来 `Katachi for Designers` を別アプリとして出す場合は、商品IDも `katachi.designers.*` のように分ける。
 
-## Firebase / Googleログイン
+## Firebase / Googleログイン / Sign in with Apple
 
-Swift Package Managerで次を追加する。
+Swift Package Managerで次を追加済み。
 
-- `https://github.com/firebase/firebase-ios-sdk.git`
+- `https://github.com/firebase/firebase-ios-sdk.git`（`12.12.1` から次のメジャー未満）
+  - `FirebaseCore`
   - `FirebaseAuth`
   - `FirebaseFirestore`
-- `https://github.com/google/GoogleSignIn-iOS.git`
+- `https://github.com/google/GoogleSignIn-iOS.git`（`9.1.0` から次のメジャー未満）
   - `GoogleSignIn`
 
-Firebase Consoleから `GoogleService-Info.plist` をダウンロードしてアプリターゲットに追加する。Googleログインを使う場合は、plist内の `REVERSED_CLIENT_ID` をURL Schemeにも設定する。
+Firebase Consoleから `GoogleService-Info.plist` をダウンロードしてアプリターゲットに追加する。Googleログインを使う場合は、plist内の `REVERSED_CLIENT_ID` をURL Schemeにも設定する。Googleログインを出すため、審査対策としてSign in with Appleも同じFirebase Authへ接続している。
+
+Xcodeでの残作業:
+
+- Firebase Consoleで Authentication > Sign-in method > Google を有効化
+- Firebase Consoleで Authentication > Sign-in method > Apple を有効化
+- Apple DeveloperのIdentifiersでSign in with Apple Capabilityを有効化
+- `GoogleService-Info.plist` を `開発者用メモアプリ` ターゲットに追加
+- Target > Info > URL Types に `REVERSED_CLIENT_ID` をURL Schemeとして追加
+- Target > Build Settings > Other Linker Flags に `-ObjC` が入っていることを確認
+- `firebase/firestore.rules` をFirebaseプロジェクトにデプロイ
+- Sandbox/TestFlightでSign in with Apple、Googleログイン、同期、ログアウト、クラウドアカウント削除を確認
 
 ## Firestore構造
 
@@ -39,3 +51,13 @@ users/{uid}/ideas/{ideaId}
 ```
 
 `IdeaCloudRecord` がSwiftDataの `Idea` をFirestoreへ保存できる辞書に変換する。
+
+Firestore Security Rulesは `firebase/firestore.rules` に配置済み。本人の `users/{uid}/ideas/{ideaId}` だけを読み書きできる前提にしている。
+
+## DBコストを守る設計
+
+- 一覧表示はホーム、検索、グループ詳細ともに24件ずつ追加表示する。
+- Firestore同期は、初回以外は前回成功同期以降に更新されたカードだけを書き込む。
+- 同期中に作成されたカードを取りこぼさないよう、同期開始時刻を保存基準にする。
+- Firestoreから一覧取得を実装する場合も、`limit(24)` とcursorベースのページングを使う。`offset` は読み取り課金が増えるため使わない。
+- 将来クラウドから一覧を直接読む場合は、一覧用の軽いsummaryドキュメントと本文ドキュメントを分ける。Firestoreは1件readでドキュメント全体を返すため、本文を毎回一覧で読まない。

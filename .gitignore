@@ -1,0 +1,7 @@
+.DS_Store
+DerivedData/
+*.xcuserstate
+
+# Firebase app configuration is generated per Firebase project.
+# Add it locally to the app target before archive, but do not commit it by default.
+GoogleService-Info.plist

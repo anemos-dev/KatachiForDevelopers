@@ -1,6 +1,10 @@
 import SwiftUI
 import SwiftData
 
+#if canImport(GoogleSignIn)
+import GoogleSignIn
+#endif
+
 @main
 struct KatachiApp: App {
     init() {
@@ -23,6 +27,11 @@ struct KatachiApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+#if canImport(GoogleSignIn)
+                .onOpenURL { url in
+                    GIDSignIn.sharedInstance.handle(url)
+                }
+#endif
         }
         .modelContainer(sharedModelContainer)
     }

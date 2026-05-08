@@ -23,6 +23,96 @@ enum IdeaKind: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+struct IdeaKindOption: Codable, Identifiable, Equatable, Hashable {
+    let id: String
+    var label: String
+    var isBuiltIn: Bool
+}
+
+enum IdeaKindCatalog {
+    static let storageKey = "settings.ideaKindOptions"
+
+    static let defaultOptions: [IdeaKindOption] = IdeaKind.allCases.map {
+        IdeaKindOption(id: $0.rawValue, label: $0.label, isBuiltIn: true)
+    }
+
+    static func options(from data: String) -> [IdeaKindOption] {
+        guard let decoded = try? JSONDecoder().decode([IdeaKindOption].self, from: Data(data.utf8)),
+              !decoded.isEmpty else {
+            return defaultOptions
+        }
+        return decoded
+    }
+
+    static func encode(_ options: [IdeaKindOption]) -> String {
+        guard let data = try? JSONEncoder().encode(options),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return encoded
+    }
+
+    static func makeCustomOption(label: String) -> IdeaKindOption {
+        IdeaKindOption(id: "custom.\(UUID().uuidString)", label: label.trimmed, isBuiltIn: false)
+    }
+
+    static func label(for rawValue: String, options: [IdeaKindOption]) -> String {
+        if let option = options.first(where: { $0.id == rawValue }) {
+            return option.label
+        }
+        if let builtIn = IdeaKind(rawValue: rawValue) {
+            return builtIn.label
+        }
+        return rawValue.isEmpty ? IdeaKind.feature.label : rawValue
+    }
+}
+
+struct IdeaGroupOption: Codable, Identifiable, Equatable, Hashable {
+    let id: String
+    var name: String
+}
+
+enum IdeaGroupCatalog {
+    static let storageKey = "settings.ideaGroupOptions"
+    static let defaultName = "Inbox"
+    static let defaultOptions = [
+        IdeaGroupOption(id: "group.inbox", name: defaultName),
+        IdeaGroupOption(id: "group.personal", name: "個人開発"),
+        IdeaGroupOption(id: "group.work", name: "仕事"),
+        IdeaGroupOption(id: "group.article", name: "記事")
+    ]
+
+    static func options(from data: String) -> [IdeaGroupOption] {
+        guard let decoded = try? JSONDecoder().decode([IdeaGroupOption].self, from: Data(data.utf8)),
+              !decoded.isEmpty else {
+            return defaultOptions
+        }
+        return decoded
+    }
+
+    static func encode(_ options: [IdeaGroupOption]) -> String {
+        guard let data = try? JSONEncoder().encode(options),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return encoded
+    }
+
+    static func makeCustomOption(name: String) -> IdeaGroupOption {
+        IdeaGroupOption(id: "group.\(UUID().uuidString)", name: name.trimmed)
+    }
+
+    static func displayName(for storedName: String) -> String {
+        let trimmed = storedName.trimmed
+        return trimmed.isEmpty ? defaultName : trimmed
+    }
+
+    static func storedName(from displayName: String) -> String {
+        let trimmed = displayName.trimmed
+        return trimmed == defaultName ? "" : trimmed
+    }
+}
+
 enum IdeaStatus: String, CaseIterable, Codable, Identifiable {
     case inbox
     case refining
@@ -97,11 +187,67 @@ enum AppPlan: String, CaseIterable, Equatable, Identifiable {
     var shortDescription: String {
         switch self {
         case .free:
-            return "ローカル保存50件まで。テンプレートと基本機能を無料で使えます。"
+            return "まず試す方向け。端末内に50件まで保存できます。"
         case .plus:
-            return "個人開発向け。クラウド保存と月300件の新規作成枠。"
+            return "個人開発を続ける方向け。クラウド保存と月300件の新規作成枠。"
         case .pro:
-            return "ヘビー利用向け。クラウド保存と月1,500件の新規作成枠。"
+            return "毎日たくさん残す方向け。クラウド保存と月1,500件の新規作成枠。"
+        }
+    }
+
+    var audienceLabel: String {
+        switch self {
+        case .free:
+            return "まず試したい人"
+        case .plus:
+            return "個人開発を続ける人"
+        case .pro:
+            return "仕事・複数案件で使う人"
+        }
+    }
+
+    var upgradeHeadline: String {
+        switch self {
+        case .free:
+            return "50件までローカル保存"
+        case .plus:
+            return "クラウド保存で、毎月300件まで"
+        case .pro:
+            return "大容量で、毎月1,500件まで"
+        }
+    }
+
+    var sellingPoints: [String] {
+        switch self {
+        case .free:
+            return [
+                "テンプレートと基本機能",
+                "端末内だけに保存",
+                "保存枠は買い切りで追加可能"
+            ]
+        case .plus:
+            return [
+                "Firebase保存と複数端末同期",
+                "Google / Appleログイン",
+                "月300件まで新規作成"
+            ]
+        case .pro:
+            return [
+                "Plusの全機能",
+                "月1,500件まで新規作成",
+                "大量メモ・仕事利用向け"
+            ]
+        }
+    }
+
+    var recommendationBadge: String? {
+        switch self {
+        case .free:
+            return nil
+        case .plus:
+            return "おすすめ"
+        case .pro:
+            return "大容量"
         }
     }
 }
@@ -146,6 +292,13 @@ struct IdeaCreationAllowance {
 
     var summary: String {
         "\(storageLabel): \(used)/\(limit)件"
+    }
+
+    var saveScreenSummary: String {
+        if allowed {
+            return "\(storageLabel)は\(limit)件中\(used)件使用中。あと\(remaining)件保存できます。"
+        }
+        return "\(storageLabel)の上限\(limit)件に達しました。保存枠を追加するか、Plus / Proに切り替えてください。"
     }
 }
 
@@ -307,6 +460,11 @@ extension Idea {
         set { kindRaw = newValue.rawValue }
     }
 
+    var kindValue: String {
+        get { kindRaw }
+        set { kindRaw = newValue.trimmed.isEmpty ? IdeaKind.feature.rawValue : newValue }
+    }
+
     var status: IdeaStatus {
         get { IdeaStatus(rawValue: statusRaw) ?? .inbox }
         set { statusRaw = newValue.rawValue }
@@ -326,6 +484,10 @@ extension Idea {
             return firstLine
         }
         return "Untitled Idea"
+    }
+
+    var displayGroupName: String {
+        IdeaGroupCatalog.displayName(for: projectName)
     }
 
     static func normalizeTags(_ tags: [String]) -> [String] {
@@ -388,7 +550,7 @@ extension Idea {
             - 種類: \(kind.label)
             - ステータス: \(status.label)
             - 優先度: \(priority)
-            - プロジェクト: \(projectName.isEmpty ? "未設定" : projectName)
+            - グループ: \(displayGroupName)
             - ラベル候補: \(labels)
             """
         )
@@ -400,12 +562,9 @@ extension Idea {
         var lines = [
             "- 種類: \(kind.label)",
             "- ステータス: \(status.label)",
-            "- 優先度: \(priority)"
+            "- 優先度: \(priority)",
+            "- グループ: \(displayGroupName)"
         ]
-
-        if !projectName.isEmpty {
-            lines.append("- 関連プロジェクト: \(projectName)")
-        }
 
         if !tags.isEmpty {
             lines.append("- タグ: \(tags.map { "#\($0)" }.joined(separator: " "))")
@@ -425,5 +584,11 @@ extension Idea {
             \(cleaned)
             """
         )
+    }
+}
+
+extension String {
+    var trimmed: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+import AuthenticationServices
+import CryptoKit
+import Security
 
 #if canImport(FirebaseCore)
 import FirebaseCore
@@ -117,6 +120,7 @@ enum CloudSyncState: Equatable {
 @MainActor
 final class CloudSyncManager: ObservableObject {
     @Published private(set) var state: CloudSyncState = .localOnly
+    private var currentAppleSignInNonce: String?
 
     func refresh(for plan: AppPlan) {
         guard plan.usesCloudStorage else {
@@ -180,10 +184,79 @@ final class CloudSyncManager: ObservableObject {
 #endif
     }
 
-    func sync(ideas: [Idea], plan: AppPlan) async {
+    func configureAppleSignInRequest(_ request: ASAuthorizationAppleIDRequest) {
+#if canImport(FirebaseAuth)
+        let nonce = Self.randomNonceString()
+        currentAppleSignInNonce = nonce
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = Self.sha256(nonce)
+#else
+        _ = request
+#endif
+    }
+
+    func completeAppleSignIn(_ result: Result<ASAuthorization, Error>) async {
+#if canImport(FirebaseCore) && canImport(FirebaseAuth)
+        FirebaseBootstrap.configureIfPossible()
+
+        guard FirebaseApp.app() != nil else {
+            state = .needsConfiguration("GoogleService-Info.plistを追加してFirebaseを初期化してください。")
+            return
+        }
+        guard let nonce = currentAppleSignInNonce else {
+            state = .failed("Appleログインのnonceを確認できませんでした。")
+            return
+        }
+
+        state = .syncing
+        do {
+            let authorization = try result.get()
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                state = .failed("Appleログイン資格情報を取得できませんでした。")
+                return
+            }
+            guard let tokenData = credential.identityToken,
+                  let idToken = String(data: tokenData, encoding: .utf8) else {
+                state = .failed("Apple IDトークンを取得できませんでした。")
+                return
+            }
+
+            let authCredential = OAuthProvider.appleCredential(
+                withIDToken: idToken,
+                rawNonce: nonce,
+                fullName: credential.fullName
+            )
+            let authResult = try await Auth.auth().signIn(with: authCredential)
+            state = .ready(authResult.user.email ?? authResult.user.displayName ?? "Apple ID")
+        } catch {
+            state = .failed("Appleログインに失敗しました: \(error.localizedDescription)")
+        }
+#else
+        _ = result
+        state = .needsConfiguration("FirebaseAuth SDKを追加するとSign in with Appleを使えます。")
+#endif
+    }
+
+    func signOut() {
+#if canImport(FirebaseAuth)
+        do {
+            try Auth.auth().signOut()
+#if canImport(GoogleSignIn)
+            GIDSignIn.sharedInstance.signOut()
+#endif
+            state = .signedOut
+        } catch {
+            state = .failed("ログアウトに失敗しました: \(error.localizedDescription)")
+        }
+#else
+        state = .needsConfiguration("FirebaseAuth SDKを追加するとログアウトできます。")
+#endif
+    }
+
+    func sync(ideas: [Idea], plan: AppPlan) async -> Date? {
         guard plan.usesCloudStorage else {
             state = .localOnly
-            return
+            return nil
         }
 
         let records = ideas.map(IdeaCloudRecord.init)
@@ -191,9 +264,55 @@ final class CloudSyncManager: ObservableObject {
 #if canImport(FirebaseCore) && canImport(FirebaseAuth) && canImport(FirebaseFirestore)
         guard FirebaseApp.app() != nil else {
             state = .needsConfiguration("GoogleService-Info.plistを追加してFirebaseを初期化してください。")
-            return
+            return nil
         }
         guard let userID = Auth.auth().currentUser?.uid else {
+            state = .signedOut
+            return nil
+        }
+
+        state = .syncing
+        do {
+            guard !records.isEmpty else {
+                let syncedAt = Date()
+                state = .synced(syncedAt)
+                return syncedAt
+            }
+
+            let database = Firestore.firestore()
+            let ideasReference = database
+                .collection("users")
+                .document(userID)
+                .collection("ideas")
+            for chunk in records.chunked(maxCount: 450) {
+                let batch = database.batch()
+                for record in chunk {
+                    let reference = ideasReference.document(record.id)
+                    batch.setData(record.firestoreData, forDocument: reference, merge: true)
+                }
+                try await batch.commit()
+            }
+            let syncedAt = Date()
+            state = .synced(syncedAt)
+            return syncedAt
+        } catch {
+            state = .failed("Firebase同期に失敗しました: \(error.localizedDescription)")
+            return nil
+        }
+#else
+        _ = records
+        state = .needsConfiguration("Firestore SDKを追加すると、この同期ボタンからクラウド保存できます。")
+        return nil
+#endif
+    }
+
+    func deleteCloudAccount() async {
+#if canImport(FirebaseCore) && canImport(FirebaseAuth) && canImport(FirebaseFirestore)
+        guard FirebaseApp.app() != nil else {
+            state = .needsConfiguration("GoogleService-Info.plistを追加してFirebaseを初期化してください。")
+            return
+        }
+        guard let user = Auth.auth().currentUser else {
             state = .signedOut
             return
         }
@@ -201,24 +320,64 @@ final class CloudSyncManager: ObservableObject {
         state = .syncing
         do {
             let database = Firestore.firestore()
-            let batch = database.batch()
-            for record in records {
-                let reference = database
-                    .collection("users")
-                    .document(userID)
-                    .collection("ideas")
-                    .document(record.id)
-                batch.setData(record.firestoreData, forDocument: reference, merge: true)
+            let ideasReference = database
+                .collection("users")
+                .document(user.uid)
+                .collection("ideas")
+            let documents = try await ideasReference.getDocuments().documents
+            for chunk in documents.chunked(maxCount: 450) {
+                let batch = database.batch()
+                for document in chunk {
+                    batch.deleteDocument(document.reference)
+                }
+                try await batch.commit()
             }
-            try await batch.commit()
-            state = .synced(Date())
+            try await user.delete()
+#if canImport(GoogleSignIn)
+            GIDSignIn.sharedInstance.signOut()
+#endif
+            state = .signedOut
         } catch {
-            state = .failed("Firebase同期に失敗しました: \(error.localizedDescription)")
+            state = .failed("クラウドアカウント削除に失敗しました: \(error.localizedDescription)")
         }
 #else
-        _ = records
-        state = .needsConfiguration("Firestore SDKを追加すると、この同期ボタンからクラウド保存できます。")
+        state = .needsConfiguration("FirebaseAuthとFirestore SDKを追加するとクラウドアカウント削除ができます。")
 #endif
+    }
+}
+
+private extension CloudSyncManager {
+    static func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remainingLength = length
+
+        while remainingLength > 0 {
+            var randoms = [UInt8](repeating: 0, count: 16)
+            let errorCode = SecRandomCopyBytes(kSecRandomDefault, randoms.count, &randoms)
+            if errorCode != errSecSuccess {
+                fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(errorCode).")
+            }
+
+            randoms.forEach { random in
+                if remainingLength == 0 {
+                    return
+                }
+                if random < charset.count {
+                    result.append(charset[Int(random)])
+                    remainingLength -= 1
+                }
+            }
+        }
+
+        return result
+    }
+
+    static func sha256(_ input: String) -> String {
+        let inputData = Data(input.utf8)
+        let hashedData = SHA256.hash(data: inputData)
+        return hashedData.map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -270,5 +429,16 @@ extension IdeaCloudRecord {
             "createdAt": createdAt,
             "updatedAt": updatedAt
         ]
+    }
+}
+
+private extension Array {
+    func chunked(maxCount: Int) -> [[Element]] {
+        guard maxCount > 0 else {
+            return [self]
+        }
+        return stride(from: 0, to: count, by: maxCount).map { startIndex in
+            Array(self[startIndex..<Swift.min(startIndex + maxCount, count)])
+        }
     }
 }
