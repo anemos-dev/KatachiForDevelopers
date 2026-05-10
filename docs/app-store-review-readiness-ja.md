@@ -1,10 +1,10 @@
 # Katachi for Developers App Store審査準備チェックリスト
 
-最終更新: 2026-05-04
+最終更新: 2026-05-09
 
 ## 提出前の必須判定
 
-現在のコードは、Free版のローカル保存、StoreKit 2の購入導線、Firebase / Google Sign-In SDK接続、Sign in with Apple、Firestore同期、ログアウト、クラウドアカウント削除、法務/プライバシー画面まで準備済み。
+現在のコードは、Free版のローカル保存、StoreKit 2の購入導線、Firebase / Google Sign-In SDK接続、Sign in with Apple、Firestoreへのアップロード/復元を含む同期、ログアウト、クラウドアカウント削除、初回起動時の利用規約同意、法務/プライバシー画面まで準備済み。
 
 ただし、Plus / ProをApp Storeに出す場合は、次が完了するまで提出しない。
 
@@ -26,14 +26,22 @@
 - ホーム画面表示名: `Katachi`
 - App Store表示名: `Katachi for Developers`
 - Bundle ID: `com.Anemos.KatachiDevelopers`
+- Version: `1.0.0`
+- iOS Deployment Target: `17.0`
 - PrivacyInfo.xcprivacyを追加
 - UserDefaultsのRequired Reason API: `NSPrivacyAccessedAPICategoryUserDefaults` / `CA92.1`
 - Firebase同期用のEmail Address、User ID、Other User Content、Purchase HistoryをApp Functionality目的で申告
 - アプリ内から「法務・プライバシー」画面へ到達可能
+- 初回起動時に利用規約とプライバシーポリシーを表示し、同意しないと本体画面へ進めない
+- 利用規約にOS非対応、返金手続き、データ消失、クラウド同期、サービス終了、免責の説明を追加
+- 同期ボタンはFirestoreから既存データを復元し、端末側とクラウド側のうち更新日時が新しい内容を残す
+- 端末側で削除したカードは、ログイン済みのPlus / ProではFirestore上の同一カードも削除する
 - サブスク画面に自動更新、解約、管理方法を明記
 - Restore Purchases導線を設置
 - 追加保存枠をFree向けの消耗型アイテムとして説明
 - Sign in with Apple / Googleログイン後のログアウトとクラウドアカウント削除導線を設置
+- 期限メモ、検索履歴、紹介コード、特典コード期限/端末内回数制限、初回サンプルカードを実装
+- App Store Connect入力案、公開ページ下書き、リリース前QAチェックリストを `docs/` に追加
 
 ## App Store Connect メタデータ案
 
@@ -101,8 +109,11 @@ Plus / Proを提出する場合は、Review NotesにSandboxで購入・復元・
 ## 提出直前チェック
 
 - XcodeでProduct > Archiveが成功
+- iOS Deployment Targetが `17.0` になっている
+- Versionが `1.0.0`、Buildが提出済みビルドより大きい
 - Product > Generate Privacy ReportでPrivacyInfoの内容を確認
 - App Store ConnectのPrivacy Policy URLとSupport URLが有効
+- Terms URL、User Privacy Choices URL、Support URLの `TODO` を公開情報へ置き換える
 - アプリ内の法務画面と公開Privacy Policy / Termsの内容が矛盾していない
 - サブスク価格、期間、更新条件、解約方法がアプリ内とApp Store Connectで一致
 - すべてのIAP商品がアプリバージョンに紐付いている

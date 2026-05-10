@@ -6,14 +6,22 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var ideas: [Idea]
 
+    @AppStorage("legal.acceptedTermsVersion") private var acceptedTermsVersion = ""
+    @AppStorage("onboarding.didInsertSampleIdeas") private var didInsertSampleIdeas = false
     @StateObject private var purchaseManager = PurchaseManager()
     @StateObject private var cloudSyncManager = CloudSyncManager()
 
     @AppStorage("billing.currentPlan") private var currentPlanRaw = AppPlan.free.rawValue
+    @AppStorage("billing.promotionPlan") private var promotionPlanRaw = ""
     @AppStorage("billing.extraLocalSlots") private var extraLocalSlots = 0
+    @AppStorage("billing.redeemedPromotionCodes") private var redeemedPromotionCodesData = ""
     @AppStorage("cloudSync.lastSuccessfulSyncAt") private var lastSuccessfulCloudSyncAt = 0.0
     @AppStorage(IdeaKindCatalog.storageKey) private var ideaKindOptionsData = ""
     @AppStorage(IdeaGroupCatalog.storageKey) private var ideaGroupOptionsData = ""
+    @AppStorage("quickCapture.lastKindRaw") private var quickCaptureKindRaw = IdeaKind.feature.rawValue
+    @AppStorage("quickCapture.lastGroupName") private var quickCaptureGroupName = IdeaGroupCatalog.defaultName
+    @AppStorage("search.recentQueries") private var recentSearchQueriesData = ""
+    @AppStorage("campaign.referralBonusApplied") private var referralBonusApplied = false
 
     @State private var searchText = ""
     @State private var selectedKindRaw: String?
@@ -27,78 +35,121 @@ struct ContentView: View {
     @State private var isPresentingBillingSheet = false
     @State private var isPresentingLegalSheet = false
     @State private var quickCaptureText = ""
-    @State private var quickCaptureKindRaw = IdeaKind.feature.rawValue
-    @State private var quickCaptureGroupName = IdeaGroupCatalog.defaultName
     @State private var quickCaptureSuccessMessage: String?
     @State private var quickCaptureResetID = UUID()
+    @State private var promotionCodeInput = ""
+    @State private var promotionCodeMessage: String?
+    @State private var promotionCodeMessageColor: Color = .secondary
+    @State private var referralCodeInput = ""
+    @State private var referralCodeMessage: String?
+    @State private var deletionCandidate: Idea?
+    @State private var selectedIdea: Idea?
     @State private var homeVisibleCount = IdeaPaging.pageSize
     @State private var searchVisibleCount = IdeaPaging.pageSize
     @State private var groupVisibleCounts: [String: Int] = [:]
 
     var body: some View {
-        NavigationStack {
-            selectedTabContent
-            .navigationTitle(selectedTab.title)
-            .navigationBarTitleDisplayMode(.large)
-            .safeAreaInset(edge: .bottom) {
-                KatachiTabBar(selectedTab: $selectedTab)
-            }
-            .sheet(isPresented: $isPresentingCreateSheet) {
+        Group {
+            if hasAcceptedCurrentTerms {
                 NavigationStack {
-                    IdeaEditorView(
-                        kindOptionsData: $ideaKindOptionsData,
-                        groupOptionsData: $ideaGroupOptionsData
+                    selectedTabContent
+                    .navigationTitle(selectedTab.title)
+                    .navigationBarTitleDisplayMode(.large)
+                    .safeAreaInset(edge: .bottom) {
+                        KatachiTabBar(selectedTab: $selectedTab)
+                    }
+                    .sheet(isPresented: $isPresentingCreateSheet) {
+                        NavigationStack {
+                            IdeaEditorView(
+                                kindOptionsData: $ideaKindOptionsData,
+                                groupOptionsData: $ideaGroupOptionsData
+                            )
+                        }
+                    }
+                    .sheet(isPresented: $isPresentingBillingSheet) {
+                        NavigationStack {
+                            BillingView(
+                                currentPlan: currentPlan,
+                                extraLocalSlots: extraLocalSlots,
+                                purchaseManager: purchaseManager,
+                                selectFreePlan: selectFreePlan,
+                                applyPurchase: applyPurchase,
+                                restorePurchases: restorePurchases
+                            )
+                        }
+                    }
+                    .sheet(isPresented: $isPresentingLegalSheet) {
+                        NavigationStack {
+                            LegalView()
+                        }
+                    }
+                    .task {
+                        await purchaseManager.start()
+                        syncStoredPlanWithEntitlements()
+                        cloudSyncManager.refresh(for: currentPlan)
+                    }
+                    .onChange(of: purchaseManager.purchasedProductIDs) { _, _ in
+                        syncStoredPlanWithEntitlements()
+                        cloudSyncManager.refresh(for: currentPlan)
+                    }
+                    .onChange(of: currentPlan) { _, newPlan in
+                        cloudSyncManager.refresh(for: newPlan)
+                    }
+                    .onChange(of: searchText) { _, _ in
+                        searchVisibleCount = IdeaPaging.pageSize
+                    }
+                    .onChange(of: selectedKindRaw) { _, _ in
+                        searchVisibleCount = IdeaPaging.pageSize
+                    }
+                    .onChange(of: selectedGroupName) { _, _ in
+                        searchVisibleCount = IdeaPaging.pageSize
+                    }
+                    .onChange(of: selectedStatus) { _, _ in
+                        searchVisibleCount = IdeaPaging.pageSize
+                    }
+                    .onChange(of: favoritesOnly) { _, _ in
+                        searchVisibleCount = IdeaPaging.pageSize
+                    }
+                    .onChange(of: sortOption) { _, _ in
+                        resetVisibleIdeaPages()
+                    }
+                    .confirmationDialog(
+                        "このカードを削除しますか？",
+                        isPresented: deletionConfirmationBinding,
+                        titleVisibility: .visible
+                    ) {
+                        Button("削除", role: .destructive) {
+                            if let deletionCandidate {
+                                deleteIdea(deletionCandidate)
+                            }
+                        }
+                        Button("キャンセル", role: .cancel) {}
+                    } message: {
+                        Text("クラウド同期中の場合、Firebase上の同じカードも削除されます。")
+                    }
+                    .navigationDestination(item: $selectedIdea) { idea in
+                        IdeaDetailView(
+                            idea: idea,
+                            kindOptionsData: $ideaKindOptionsData,
+                            groupOptionsData: $ideaGroupOptionsData
+                        )
+                    }
+                }
+            } else {
+                NavigationStack {
+                    TermsAcceptanceView(
+                        acceptAction: {
+                            acceptedTermsVersion = LegalCopy.termsVersion
+                            insertSampleIdeasIfNeeded()
+                        }
                     )
                 }
-            }
-            .sheet(isPresented: $isPresentingBillingSheet) {
-                NavigationStack {
-                    BillingView(
-                        currentPlan: currentPlan,
-                        extraLocalSlots: extraLocalSlots,
-                        purchaseManager: purchaseManager,
-                        selectFreePlan: selectFreePlan,
-                        applyPurchase: applyPurchase,
-                        restorePurchases: restorePurchases
-                    )
-                }
-            }
-            .sheet(isPresented: $isPresentingLegalSheet) {
-                NavigationStack {
-                    LegalView()
-                }
-            }
-            .task {
-                await purchaseManager.start()
-                syncStoredPlanWithEntitlements()
-                cloudSyncManager.refresh(for: currentPlan)
-            }
-            .onChange(of: purchaseManager.purchasedProductIDs) { _, _ in
-                syncStoredPlanWithEntitlements()
-                cloudSyncManager.refresh(for: currentPlan)
-            }
-            .onChange(of: currentPlan) { _, newPlan in
-                cloudSyncManager.refresh(for: newPlan)
-            }
-            .onChange(of: searchText) { _, _ in
-                searchVisibleCount = IdeaPaging.pageSize
-            }
-            .onChange(of: selectedKindRaw) { _, _ in
-                searchVisibleCount = IdeaPaging.pageSize
-            }
-            .onChange(of: selectedGroupName) { _, _ in
-                searchVisibleCount = IdeaPaging.pageSize
-            }
-            .onChange(of: selectedStatus) { _, _ in
-                searchVisibleCount = IdeaPaging.pageSize
-            }
-            .onChange(of: favoritesOnly) { _, _ in
-                searchVisibleCount = IdeaPaging.pageSize
-            }
-            .onChange(of: sortOption) { _, _ in
-                resetVisibleIdeaPages()
             }
         }
+    }
+
+    private var hasAcceptedCurrentTerms: Bool {
+        acceptedTermsVersion == LegalCopy.termsVersion
     }
 
     @ViewBuilder
@@ -123,7 +174,11 @@ struct ContentView: View {
             EmptyStateView(
                 title: "Katachiにまだカードがありません",
                 systemImage: "lightbulb",
-                message: "中央の + から、最初のアイデアをすぐ残せます。"
+                message: "思いついたことを、まず1枚だけ保存してみましょう。",
+                actionTitle: "保存する",
+                action: {
+                    selectedTab = .save
+                }
             )
         } else {
             List {
@@ -135,22 +190,28 @@ struct ContentView: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
 
+                if shouldShowUpgradeNudge {
+                    UpgradeNudgeRow(
+                        title: upgradeNudgeTitle,
+                        message: upgradeNudgeMessage,
+                        action: {
+                            isPresentingBillingSheet = true
+                        }
+                    )
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                }
+
                 if currentPlan.usesCloudStorage {
                     cloudSyncRow
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)
                 }
 
-                Section {
-                    Picker("並び替え", selection: $sortOption) {
-                        ForEach(IdeaSortOption.allCases) { option in
-                            Text(option.label).tag(option)
-                        }
+                Section("最近のカード") {
+                    ForEach(pagedHomeIdeas) { idea in
+                        ideaNavigationLink(for: idea)
                     }
-                }
-
-                ForEach(groupedHomeSections) { section in
-                    ideaSection(section)
                 }
 
                 if hasMoreHomeIdeas {
@@ -211,6 +272,9 @@ struct ContentView: View {
             canSave: canSaveQuickCapture,
             statusText: creationAllowance.saveScreenSummary,
             successMessage: quickCaptureSuccessMessage,
+            showsUpgradeNudge: shouldShowUpgradeNudge,
+            upgradeTitle: upgradeNudgeTitle,
+            upgradeMessage: upgradeNudgeMessage,
             kindOptions: kindOptions,
             groupNames: quickCaptureGroupNames,
             saveAction: saveQuickCapture,
@@ -225,6 +289,24 @@ struct ContentView: View {
                 TextField("タイトル・内容・タグで検索", text: $searchText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .onSubmit(recordCurrentSearchQuery)
+
+                if !recentSearchQueries.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(recentSearchQueries, id: \.self) { query in
+                                Button(query) {
+                                    searchText = query
+                                    recordSearchQuery(query)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
             }
 
             Section("絞り込み") {
@@ -261,6 +343,11 @@ struct ContentView: View {
                     resetSearchFilters()
                 }
                 .disabled(!hasActiveFilters && searchText.trimmed.isEmpty)
+
+                Button("検索履歴を消去") {
+                    recentSearchQueriesData = ""
+                }
+                .disabled(recentSearchQueries.isEmpty)
             }
 
             if hasActiveFilters {
@@ -274,9 +361,14 @@ struct ContentView: View {
             }
 
             if filteredIdeas.isEmpty {
-                EmptyResultsRow()
+                EmptyResultsRow(
+                    actionTitle: hasActiveFilters || !searchText.trimmed.isEmpty ? "条件をリセット" : nil,
+                    action: {
+                        resetSearchFilters()
+                    }
+                )
             } else {
-                Section("検索結果") {
+                Section("検索結果 \(filteredIdeas.count)件") {
                     ForEach(pagedFilteredIdeas) { idea in
                         ideaNavigationLink(for: idea)
                     }
@@ -297,6 +389,31 @@ struct ContentView: View {
 
     private var settingsContent: some View {
         List {
+            Section("アカウント") {
+                cloudSyncRow
+            }
+
+            Section {
+                PlanSummaryCard(
+                    plan: currentPlan,
+                    allowance: creationAllowance,
+                    extraLocalSlots: extraLocalSlots,
+                    action: {
+                        isPresentingBillingSheet = true
+                    }
+                )
+
+                Button {
+                    isPresentingBillingSheet = true
+                } label: {
+                    Label("プランを管理", systemImage: currentPlan == .free ? "person.crop.circle.badge.plus" : "cloud.fill")
+                }
+            } header: {
+                Text("プラン")
+            } footer: {
+                Text("保存枠が少なくなったら、Freeの追加枠またはPlus / Proを選べます。クラウド保存はPlus / Proで使えます。")
+            }
+
             Section("ライブラリ") {
                 NavigationLink {
                     LibrarySettingsView(
@@ -308,14 +425,20 @@ struct ContentView: View {
                 }
             }
 
-            Section("プランと同期") {
-                Button {
-                    isPresentingBillingSheet = true
-                } label: {
-                    Label("プランを管理", systemImage: currentPlan == .free ? "person.crop.circle.badge.plus" : "cloud.fill")
-                }
-
-                cloudSyncRow
+            Section {
+                PromotionCodeRedeemView(
+                    code: $promotionCodeInput,
+                    message: promotionCodeMessage,
+                    messageColor: promotionCodeMessageColor,
+                    redeemAction: redeemPromotionCode,
+                    referralCode: $referralCodeInput,
+                    referralMessage: referralCodeMessage,
+                    referralAction: applyReferralCode
+                )
+            } header: {
+                Text("特典コード")
+            } footer: {
+                Text("特典コードを引き換えると、プランの有効化や保存枠の追加ができます。App Storeの購入履歴とは別管理です。")
             }
 
             Section("情報") {
@@ -332,10 +455,20 @@ struct ContentView: View {
     }
 
     private var currentPlan: AppPlan {
-        if purchaseManager.hasCheckedEntitlements {
-            return purchaseManager.entitledPlan ?? .free
-        }
-        return AppPlan(rawValue: currentPlanRaw) ?? .free
+        let purchasedPlan = purchaseManager.hasCheckedEntitlements ? purchaseManager.entitledPlan : nil
+        let storedPlan = AppPlan(rawValue: currentPlanRaw) ?? .free
+        let promotionPlan = AppPlan(rawValue: promotionPlanRaw)
+        return [purchasedPlan, promotionPlan, storedPlan]
+            .compactMap { $0 }
+            .max(by: { $0.rank < $1.rank }) ?? .free
+    }
+
+    private var redeemedPromotionCodes: Set<String> {
+        PromotionCodeStore.decode(redeemedPromotionCodesData)
+    }
+
+    private var recentSearchQueries: [String] {
+        RecentSearchStore.decode(recentSearchQueriesData)
     }
 
     private var hasActiveFilters: Bool {
@@ -355,7 +488,7 @@ struct ContentView: View {
         let existingNames = Set(options.map(\.name))
         let discovered = Set(ideas.map(\.displayGroupName))
         for name in discovered.sorted() where !existingNames.contains(name) {
-            options.append(IdeaGroupOption(id: "discovered.\(name)", name: name))
+            options.append(IdeaGroupOption(id: "discovered.\(name)", name: name, iconName: "folder", colorName: "gray"))
         }
         return options
     }
@@ -379,6 +512,17 @@ struct ContentView: View {
         Binding(
             get: { selectedGroupName ?? "all" },
             set: { selectedGroupName = $0 == "all" ? nil : $0 }
+        )
+    }
+
+    private var deletionConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { deletionCandidate != nil },
+            set: { isPresented in
+                if !isPresented {
+                    deletionCandidate = nil
+                }
+            }
         )
     }
 
@@ -408,11 +552,7 @@ struct ContentView: View {
             },
             syncAction: {
                 Task {
-                    let syncCutoff = Date()
-                    let changedIdeas = ideasForCloudSync(upTo: syncCutoff)
-                    if await cloudSyncManager.sync(ideas: changedIdeas, plan: currentPlan) != nil {
-                        lastSuccessfulCloudSyncAt = syncCutoff.timeIntervalSince1970
-                    }
+                    await performCloudSync()
                 }
             },
             deleteAccountAction: {
@@ -456,15 +596,21 @@ struct ContentView: View {
     }
 
     private var pagedHomeIdeas: [Idea] {
-        Array(sortedIdeas(ideas).prefix(homeVisibleCount))
+        Array(homeSortedIdeas.prefix(homeVisibleCount))
+    }
+
+    private var homeSortedIdeas: [Idea] {
+        ideas.sorted { lhs, rhs in
+            lhs.updatedAt > rhs.updatedAt
+        }
     }
 
     private var hasMoreHomeIdeas: Bool {
-        sortedIdeas(ideas).count > homeVisibleCount
+        homeSortedIdeas.count > homeVisibleCount
     }
 
     private var remainingHomeIdeasCount: Int {
-        max(sortedIdeas(ideas).count - homeVisibleCount, 0)
+        max(homeSortedIdeas.count - homeVisibleCount, 0)
     }
 
     private var hasMoreSearchIdeas: Bool {
@@ -479,6 +625,25 @@ struct ContentView: View {
         lastSuccessfulCloudSyncAt > 0 ? Date(timeIntervalSince1970: lastSuccessfulCloudSyncAt) : nil
     }
 
+    private var shouldShowUpgradeNudge: Bool {
+        guard creationAllowance.allowed else {
+            return true
+        }
+        let warningThreshold = max(5, Int(Double(creationAllowance.limit) * 0.1))
+        return creationAllowance.remaining <= warningThreshold
+    }
+
+    private var upgradeNudgeTitle: String {
+        creationAllowance.allowed ? "保存枠が少なくなっています" : "保存枠の上限に達しました"
+    }
+
+    private var upgradeNudgeMessage: String {
+        if currentPlan == .free {
+            return "あと\(creationAllowance.remaining)件保存できます。追加枠の購入かPlusでクラウド保存に切り替えられます。"
+        }
+        return "今月の残りは\(creationAllowance.remaining)件です。より多く保存するならProを検討できます。"
+    }
+
     private func ideasForCloudSync(upTo cutoff: Date) -> [Idea] {
         guard let lastSuccessfulCloudSyncDate else {
             return ideas.filter { $0.updatedAt <= cutoff }
@@ -486,6 +651,70 @@ struct ContentView: View {
         return ideas.filter {
             $0.updatedAt > lastSuccessfulCloudSyncDate && $0.updatedAt <= cutoff
         }
+    }
+
+    private func performCloudSync() async {
+        let syncCutoff = Date()
+        let changedIdeas = ideasForCloudSync(upTo: syncCutoff)
+
+        guard let cloudRecords = await cloudSyncManager.fetchCloudIdeas(plan: currentPlan) else {
+            return
+        }
+
+        let mergeSummary = mergeCloudRecords(cloudRecords)
+        if mergeSummary.hasChanges {
+            saveContext()
+            resetVisibleIdeaPages()
+        }
+
+        if await cloudSyncManager.sync(ideas: changedIdeas, plan: currentPlan) != nil {
+            lastSuccessfulCloudSyncAt = syncCutoff.timeIntervalSince1970
+        }
+    }
+
+    private func mergeCloudRecords(_ records: [IdeaCloudRecord]) -> CloudMergeSummary {
+        var existingIdeas = Dictionary(uniqueKeysWithValues: ideas.map { ($0.id.uuidString, $0) })
+        var summary = CloudMergeSummary()
+
+        for record in records {
+            guard let ideaID = UUID(uuidString: record.id) else {
+                summary.skipped += 1
+                continue
+            }
+
+            if let existingIdea = existingIdeas[record.id] {
+                if record.updatedAt > existingIdea.updatedAt {
+                    apply(record, to: existingIdea)
+                    summary.updated += 1
+                } else {
+                    summary.skipped += 1
+                }
+            } else {
+                let idea = Idea(record: record, id: ideaID)
+                modelContext.insert(idea)
+                existingIdeas[record.id] = idea
+                summary.inserted += 1
+            }
+        }
+
+        return summary
+    }
+
+    private func apply(_ record: IdeaCloudRecord, to idea: Idea) {
+        idea.title = record.title.trimmed
+        idea.kindValue = record.kind
+        idea.status = IdeaStatus(rawValue: record.status) ?? .inbox
+        idea.concept = record.concept.trimmed
+        idea.rationale = record.rationale.trimmed
+        idea.approach = record.approach.trimmed
+        idea.nextAction = record.nextAction.trimmed
+        idea.projectName = record.projectName.trimmed
+        idea.tags = Idea.normalizeTags(record.tags)
+        idea.priority = Idea.normalizePriority(record.priority)
+        idea.isFavorite = record.isFavorite
+        idea.dueAt = record.dueAt
+        idea.createdAt = record.createdAt
+        idea.updatedAt = record.updatedAt
     }
 
     private func groupedSections(for ideas: [Idea]) -> [IdeaGroupSection] {
@@ -587,22 +816,35 @@ struct ContentView: View {
         }
     }
 
-    private func ideaNavigationLink(for idea: Idea) -> some View {
-        NavigationLink {
-            IdeaDetailView(
-                idea: idea,
-                kindOptionsData: $ideaKindOptionsData,
-                groupOptionsData: $ideaGroupOptionsData
-            )
-        } label: {
-            IdeaCardView(idea: idea, kindOptions: kindOptions)
-                .padding(.vertical, 2)
+    private func ideaNavigationLink(for idea: Idea, prominence: IdeaCardProminence = .regular) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Button {
+                selectedIdea = idea
+            } label: {
+                IdeaCardView(idea: idea, kindOptions: kindOptions, prominence: prominence)
+                    .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                toggleFavorite(idea)
+            } label: {
+                Image(systemName: idea.isFavorite ? "star.fill" : "star")
+                    .foregroundStyle(idea.isFavorite ? .yellow : .secondary)
+                    .imageScale(.medium)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(idea.isFavorite ? "お気に入りを解除" : "お気に入りに追加")
+            .padding(.top, 12)
+            .padding(.trailing, 10)
         }
         .listRowSeparator(.hidden)
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
-                deleteIdea(idea)
+                deletionCandidate = idea
             } label: {
                 Label("削除", systemImage: "trash")
             }
@@ -649,6 +891,18 @@ struct ContentView: View {
         return haystack.contains(lowered)
     }
 
+    private func recordCurrentSearchQuery() {
+        recordSearchQuery(searchText)
+    }
+
+    private func recordSearchQuery(_ query: String) {
+        let cleaned = query.trimmed
+        guard cleaned.count >= 2 else {
+            return
+        }
+        recentSearchQueriesData = RecentSearchStore.encodeAdding(cleaned, to: recentSearchQueries)
+    }
+
     private func matchesKind(_ idea: Idea) -> Bool {
         guard let selectedKindRaw else {
             return true
@@ -681,9 +935,16 @@ struct ContentView: View {
     }
 
     private func deleteIdea(_ idea: Idea) {
+        let deletedIdeaID = idea.id
         modelContext.delete(idea)
         saveContext()
         resetVisibleIdeaPages()
+
+        if currentPlan.usesCloudStorage {
+            Task {
+                await cloudSyncManager.deleteCloudIdea(id: deletedIdeaID, plan: currentPlan)
+            }
+        }
     }
 
     private func loadMoreHomeIdeas() {
@@ -741,6 +1002,15 @@ struct ContentView: View {
         quickCaptureResetID = UUID()
     }
 
+    private func insertSampleIdeasIfNeeded() {
+        guard !didInsertSampleIdeas, ideas.isEmpty else {
+            return
+        }
+        IdeaSampleFactory.makeSamples().forEach(modelContext.insert)
+        saveContext()
+        didInsertSampleIdeas = true
+    }
+
     private func saveContext() {
         do {
             try modelContext.save()
@@ -751,6 +1021,10 @@ struct ContentView: View {
 
     private func selectFreePlan() {
         currentPlanRaw = AppPlan.free.rawValue
+        promotionPlanRaw = ""
+        promotionCodeMessage = "特典コードで有効化したプランを解除しました。"
+        promotionCodeMessageColor = .secondary
+        cloudSyncManager.refresh(for: currentPlan)
     }
 
     private func applyPurchase(_ product: BillingProduct) {
@@ -772,6 +1046,70 @@ struct ContentView: View {
     private func syncStoredPlanWithEntitlements() {
         currentPlanRaw = (purchaseManager.entitledPlan ?? .free).rawValue
     }
+
+    private func redeemPromotionCode() {
+        let normalizedCode = PromotionCode.normalized(promotionCodeInput)
+        guard !normalizedCode.isEmpty else {
+            promotionCodeMessage = "特典コードを入力してください。"
+            promotionCodeMessageColor = .red
+            return
+        }
+        guard let promotionCode = PromotionCode.find(normalizedCode) else {
+            promotionCodeMessage = "この特典コードは使えません。"
+            promotionCodeMessageColor = .red
+            return
+        }
+        guard promotionCode.isCurrentlyValid else {
+            promotionCodeMessage = "この特典コードは有効期限が切れています。"
+            promotionCodeMessageColor = .red
+            return
+        }
+        if promotionCode.localRedemptionLimit != nil,
+           redeemedPromotionCodes.contains(promotionCode.id) {
+            promotionCodeMessage = "この特典コードはすでに適用済みです。"
+            promotionCodeMessageColor = .secondary
+            return
+        }
+
+        switch promotionCode.effect {
+        case .plan(let plan):
+            promotionPlanRaw = plan.rawValue
+            currentPlanRaw = plan.rawValue
+            cloudSyncManager.refresh(for: currentPlan)
+        case .extraSlots(let slots):
+            extraLocalSlots += slots
+        }
+
+        if promotionCode.localRedemptionLimit != nil {
+            var redeemedCodes = redeemedPromotionCodes
+            redeemedCodes.insert(promotionCode.id)
+            redeemedPromotionCodesData = PromotionCodeStore.encode(redeemedCodes)
+        }
+
+        promotionCodeInput = ""
+        promotionCodeMessage = "\(promotionCode.effect.message) \(promotionCode.note)"
+        promotionCodeMessageColor = .green
+    }
+
+    private func applyReferralCode() {
+        let normalizedCode = ReferralCode.normalized(referralCodeInput)
+        guard !normalizedCode.isEmpty else {
+            referralCodeMessage = "紹介コードを入力してください。"
+            return
+        }
+        guard ReferralCode.isValid(normalizedCode) else {
+            referralCodeMessage = "この紹介コードは使えません。"
+            return
+        }
+        guard !referralBonusApplied else {
+            referralCodeMessage = "紹介特典はこの端末では適用済みです。"
+            return
+        }
+        extraLocalSlots += ReferralCode.bonusSlots
+        referralBonusApplied = true
+        referralCodeInput = ""
+        referralCodeMessage = "紹介特典として保存枠を+\(ReferralCode.bonusSlots)件追加しました。"
+    }
 }
 
 private struct IdeaGroupSection: Identifiable {
@@ -779,6 +1117,158 @@ private struct IdeaGroupSection: Identifiable {
     let ideas: [Idea]
 
     var id: String { name }
+}
+
+private struct CloudMergeSummary {
+    var inserted = 0
+    var updated = 0
+    var skipped = 0
+
+    var hasChanges: Bool {
+        inserted > 0 || updated > 0
+    }
+}
+
+private enum PromotionCodeStore {
+    static func decode(_ data: String) -> Set<String> {
+        guard let jsonData = data.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: jsonData) else {
+            return []
+        }
+        return Set(decoded)
+    }
+
+    static func encode(_ codes: Set<String>) -> String {
+        guard let data = try? JSONEncoder().encode(codes.sorted()),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return encoded
+    }
+}
+
+private enum RecentSearchStore {
+    static let maxCount = 8
+
+    static func decode(_ data: String) -> [String] {
+        guard let jsonData = data.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: jsonData) else {
+            return []
+        }
+        return decoded
+    }
+
+    static func encodeAdding(_ query: String, to existing: [String]) -> String {
+        var values = existing.filter { $0.caseInsensitiveCompare(query) != .orderedSame }
+        values.insert(query, at: 0)
+        values = Array(values.prefix(maxCount))
+        guard let data = try? JSONEncoder().encode(values),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return encoded
+    }
+}
+
+private enum ReferralCode {
+    static let bonusSlots = 10
+    private static let validCodes = [
+        "KATACHI-FRIEND-10",
+        "KFD-INVITE-10"
+    ]
+
+    static func normalized(_ rawValue: String) -> String {
+        PromotionCode.normalized(rawValue)
+    }
+
+    static func isValid(_ rawValue: String) -> Bool {
+        validCodes.contains(normalized(rawValue))
+    }
+}
+
+private enum IdeaSampleFactory {
+    static func makeSamples(now: Date = Date()) -> [Idea] {
+        [
+            Idea(
+                title: "保存タブの入力欄をもっと速くする",
+                kind: .uiux,
+                status: .ready,
+                concept: "保存タブを開いた瞬間に入力欄へ集中できるようにして、思いついたことをすぐ残せる体験にする。",
+                rationale: "このアプリの中心価値は、開発中の違和感やアイデアを逃さないこと。",
+                approach: "入力欄、種類、グループ、保存ボタンの視線移動を減らす。",
+                nextAction: "実機で保存までのタップ数を確認する",
+                projectName: "",
+                tags: ["UI", "保存"],
+                priority: 4,
+                isFavorite: true,
+                dueAt: Calendar.current.date(byAdding: .day, value: 7, to: now),
+                createdAt: now,
+                updatedAt: now
+            ),
+            Idea(
+                title: "クラウド復元の確認",
+                kind: .tech,
+                status: .refining,
+                concept: "再インストール後にGoogleログインして、Firestoreからカードを復元できるか確認する。",
+                rationale: "機種変更やサ終リスクの説明にも関わる重要な品質項目。",
+                approach: "テスト端末で削除、再インストール、ログイン、同期の順に確認する。",
+                nextAction: "別端末またはシミュレータで復元テストをする",
+                projectName: IdeaGroupCatalog.storedName(from: "仕事"),
+                tags: ["Firebase", "QA"],
+                priority: 5,
+                dueAt: Calendar.current.date(byAdding: .day, value: 3, to: now),
+                createdAt: now.addingTimeInterval(-3600),
+                updatedAt: now.addingTimeInterval(-1800)
+            ),
+            Idea(
+                title: "リリース記念の特典コード運用",
+                kind: .feature,
+                status: .inbox,
+                concept: "初期ユーザー向けに保存枠を追加できる特典コードを配布する。",
+                rationale: "無料版のまま試してもらいやすくし、Plus/Proへの導線も自然に作れる。",
+                approach: "端末内コードから始め、必要になったらFirebase台帳へ移行する。",
+                nextAction: "配布するコード名と有効期限を決める",
+                projectName: IdeaGroupCatalog.storedName(from: "個人開発"),
+                tags: ["キャンペーン"],
+                priority: 3,
+                createdAt: now.addingTimeInterval(-7200),
+                updatedAt: now.addingTimeInterval(-3600)
+            )
+        ]
+    }
+}
+
+private extension AppPlan {
+    var rank: Int {
+        switch self {
+        case .free: return 0
+        case .plus: return 1
+        case .pro: return 2
+        }
+    }
+}
+
+private extension Idea {
+    convenience init(record: IdeaCloudRecord, id: UUID) {
+        self.init(
+            id: id,
+            title: record.title,
+            kind: IdeaKind(rawValue: record.kind) ?? .feature,
+            status: IdeaStatus(rawValue: record.status) ?? .inbox,
+            concept: record.concept,
+            rationale: record.rationale,
+            approach: record.approach,
+            nextAction: record.nextAction,
+            projectName: record.projectName,
+            tags: record.tags,
+            priority: record.priority,
+            isFavorite: record.isFavorite,
+            dueAt: record.dueAt,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt
+        )
+        kindValue = record.kind
+    }
 }
 
 private enum IdeaPaging {
@@ -928,8 +1418,16 @@ private struct EmptyStateView: View {
 }
 
 private struct EmptyResultsRow: View {
+    let actionTitle: String?
+    let action: (() -> Void)?
+
+    init(actionTitle: String? = nil, action: (() -> Void)? = nil) {
+        self.actionTitle = actionTitle
+        self.action = action
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 3) {
@@ -938,6 +1436,12 @@ private struct EmptyResultsRow: View {
                 Text("検索語や絞り込みを変えると見つかるかもしれません。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
             }
         }
         .padding(.vertical, 8)
@@ -998,6 +1502,9 @@ private struct QuickSaveView: View {
     let canSave: Bool
     let statusText: String
     let successMessage: String?
+    let showsUpgradeNudge: Bool
+    let upgradeTitle: String
+    let upgradeMessage: String
     let kindOptions: [IdeaKindOption]
     let groupNames: [String]
     let saveAction: () -> Void
@@ -1014,6 +1521,14 @@ private struct QuickSaveView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                if showsUpgradeNudge {
+                    UpgradeNudgeRow(
+                        title: upgradeTitle,
+                        message: upgradeMessage,
+                        action: planAction
+                    )
+                }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("入力欄")
@@ -1138,20 +1653,34 @@ private struct StorageStatusRow: View {
     let extraLocalSlots: Int
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: plan.usesCloudStorage ? "cloud.fill" : "iphone")
-                .foregroundStyle(plan.usesCloudStorage ? .blue : .secondary)
-                .frame(width: 24)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: plan.usesCloudStorage ? "cloud.fill" : "iphone")
+                    .foregroundStyle(plan.usesCloudStorage ? .blue : .secondary)
+                    .frame(width: 24)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(plan.label)  \(allowance.summary)")
-                    .font(.subheadline.weight(.semibold))
-                Text(statusDetail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(plan.label)の保存枠")
+                        .font(.subheadline.weight(.semibold))
+                    Text(statusDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
             }
 
-            Spacer(minLength: 8)
+            ProgressView(value: Double(allowance.used), total: Double(max(allowance.limit, 1)))
+                .tint(progressColor)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("使用中: \(allowance.used) / \(allowance.limit)件")
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                Text(allowance.allowed ? "あと\(allowance.remaining)件保存できます。" : "新しいカードを保存するには保存枠の追加が必要です。")
+                    .font(.caption)
+                    .foregroundStyle(allowance.allowed ? Color.secondary : Color.orange)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1164,11 +1693,106 @@ private struct StorageStatusRow: View {
     private var statusDetail: String {
         if allowance.allowed {
             if plan == .free {
-                return "残り\(allowance.remaining)件。追加枠: +\(extraLocalSlots)件"
+                return "ローカル保存。追加枠: +\(extraLocalSlots)件"
             }
-            return "残り\(allowance.remaining)件。月が変わると新規作成枠がリセットされます。"
+            return "クラウド保存。月が変わると新規作成枠がリセットされます。"
         }
         return plan == .free ? "無料枠に達しました。追加枠かPlus/Proを選べます。" : "今月の新規作成枠に達しました。"
+    }
+
+    private var progressColor: Color {
+        let ratio = Double(allowance.used) / Double(max(allowance.limit, 1))
+        if ratio >= 0.9 {
+            return .orange
+        }
+        return plan.usesCloudStorage ? .blue : .green
+    }
+}
+
+private struct UpgradeNudgeRow: View {
+    let title: String
+    let message: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "tray.and.arrow.down.fill")
+                .foregroundStyle(.orange)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("確認", action: action)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.orange.opacity(0.12))
+        )
+    }
+}
+
+private struct PlanSummaryCard: View {
+    let plan: AppPlan
+    let allowance: IdeaCreationAllowance
+    let extraLocalSlots: Int
+    let action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: plan.usesCloudStorage ? "cloud.fill" : "iphone")
+                    .foregroundStyle(plan.usesCloudStorage ? .blue : .secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Color(.tertiarySystemFill))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("現在: \(plan.label)")
+                        .font(.headline)
+                    Text(plan.shortDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+            }
+
+            ProgressView(value: Double(allowance.used), total: Double(max(allowance.limit, 1)))
+                .tint(plan.usesCloudStorage ? .blue : .green)
+
+            HStack {
+                Text("使用中 \(allowance.used) / \(allowance.limit)件")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text("残り \(allowance.remaining)件")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if plan == .free {
+                Text("追加済みローカル枠: +\(extraLocalSlots)件")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button(action: action) {
+                Label(plan == .free ? "保存枠とクラウド保存を見る" : "プランを確認", systemImage: "person.crop.circle.badge.plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -1243,10 +1867,20 @@ private struct CloudSyncStatusRow: View {
                 .signInWithAppleButtonStyle(.black)
                 .frame(width: 132, height: 32)
 
-                Button("Google", action: signInAction)
+                Button("Googleでログイン", action: signInAction)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
+        } else if state == .syncing {
+            Button {} label: {
+                HStack(spacing: 6) {
+                    ProgressView()
+                    Text("同期中")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(true)
         } else {
             Button(actionTitle, action: action)
                 .buttonStyle(.bordered)
@@ -1321,6 +1955,61 @@ private struct CloudSyncStatusRow: View {
         case .localOnly, .needsConfiguration, .syncing:
             break
         }
+    }
+}
+
+private struct PromotionCodeRedeemView: View {
+    @Binding var code: String
+    let message: String?
+    let messageColor: Color
+    let redeemAction: () -> Void
+    @Binding var referralCode: String
+    let referralMessage: String?
+    let referralAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                TextField("特典コードを入力", text: $code)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.done)
+                    .onSubmit(redeemAction)
+
+                Button("適用", action: redeemAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(code.trimmed.isEmpty)
+            }
+
+            if let message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(messageColor)
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                TextField("紹介コードを入力", text: $referralCode)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.done)
+                    .onSubmit(referralAction)
+
+                Button("適用", action: referralAction)
+                    .buttonStyle(.bordered)
+                    .disabled(referralCode.trimmed.isEmpty)
+            }
+
+            if let referralMessage {
+                Text(referralMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -1544,30 +2233,114 @@ private struct BillingFeatureRow: View {
     }
 }
 
+private enum LegalCopy {
+    static let appName = "Katachi for Developers"
+    static let displayName = "Katachi"
+    static let termsVersion = "2026-05-08"
+    static let lastUpdated = "2026年5月8日"
+
+    static let serviceSummary = [
+        "Katachi for Developersは、開発中の着想、実装メモ、検証メモなどをカードとして保存し、あとで再利用しやすくするための補助ツールです。",
+        "本アプリは、保存内容の正確性、完全性、継続保存、特定目的への適合性、第三者権利の非侵害、または将来のOSや端末での動作を保証しません。"
+    ]
+
+    static let privacyItems = [
+        "Freeプランでは、カード内容は原則として端末内に保存されます。",
+        "Plus / Proでクラウド同期を利用する場合、Sign in with AppleまたはGoogleログインの認証情報、カード内容、タグ、作成/更新日時、購入状態などをFirebaseに保存することがあります。",
+        "広告目的のトラッキングや第三者広告SDKは使用しません。",
+        "ユーザーはアプリ内でカードを削除できます。クラウド同期利用時は、同期ステータスのメニューからログアウトとクラウドアカウント削除を行えます。"
+    ]
+
+    static let termsItems = [
+        "ユーザーは、自分が権利を持つ内容、または利用許諾を得た内容だけを保存してください。違法な内容、第三者の権利を侵害する内容、秘密保持義務に反する内容の保存は禁止します。",
+        "Plus / Proは自動更新サブスクリプションです。購入はApple IDに請求され、更新、解約、返金はApp Storeの規約およびAppleの手続きに従います。",
+        "Freeの追加保存枠は消耗型アイテムです。購入後、Freeプランのローカル保存上限に加算されます。",
+        "本アプリは、OSの仕様変更、端末の買い替え、古いOSの非対応、App StoreやFirebaseなど外部サービスの変更、通信障害、メンテナンス、開発終了、配信停止、サービス終了により、全部または一部の機能が利用できなくなる場合があります。",
+        "ユーザーは重要な情報を自己の責任でバックアップしてください。アプリの不具合、同期失敗、端末故障、誤操作、アカウント削除、サービス終了などによるデータ消失について、法令で認められる最大限の範囲で、開発者は責任を負いません。",
+        "本アプリの利用または利用不能により生じた損害、逸失利益、業務上の損失、第三者との紛争について、法令で認められる最大限の範囲で、開発者は責任を負いません。",
+        "有料機能の価格、保存枠、提供内容、対応OS、提供地域は、将来変更される場合があります。既に購入済みのサブスクリプションや返金の扱いは、App Storeのルールに従います。",
+        "本規約またはプライバシーポリシーを変更する場合があります。重要な変更がある場合、アプリ内表示など合理的な方法で通知し、必要に応じて再同意を求めます。"
+    ]
+
+    static let rightsItems = [
+        "Katachi for Developersのアプリ名、UI、コード、ドキュメントはAnemosが保有または管理します。",
+        "Apple、App Store、Firebase、Googleは各社の商標です。本アプリはApple、Google、Firebaseの公式アプリではありません。"
+    ]
+}
+
+private struct TermsAcceptanceView: View {
+    let acceptAction: () -> Void
+    @State private var hasConfirmedAgreement = false
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(LegalCopy.appName)
+                        .font(.title2.weight(.bold))
+                    Text("利用規約とプライバシーポリシー")
+                        .font(.headline)
+                    Text("最終更新: \(LegalCopy.lastUpdated)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+            }
+
+            LegalCopySection(title: "アプリについて", items: LegalCopy.serviceSummary)
+            LegalCopySection(title: "プライバシーポリシー", items: LegalCopy.privacyItems)
+            LegalCopySection(title: "利用規約", items: LegalCopy.termsItems)
+            LegalCopySection(title: "権利表記", items: LegalCopy.rightsItems)
+
+            Section {
+                Toggle("上記の利用規約とプライバシーポリシーに同意します", isOn: $hasConfirmedAgreement)
+
+                Button {
+                    acceptAction()
+                } label: {
+                    Label("同意して開始", systemImage: "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!hasConfirmedAgreement)
+
+                Text("同意しない場合、本アプリを利用できません。返金や購入管理はApp Storeの手続きに従ってください。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("利用開始前の確認")
+    }
+}
+
+private struct LegalCopySection: View {
+    let title: String
+    let items: [String]
+
+    var body: some View {
+        Section(title) {
+            ForEach(items, id: \.self) { item in
+                Text(item)
+                    .font(.subheadline)
+            }
+        }
+    }
+}
+
 private struct LegalView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         List {
-            Section("Katachi for Developers") {
-                Text("Katachiは、開発中の着想をカードとして保存し、あとで実装候補として再利用しやすくするアプリです。")
+            Section(LegalCopy.appName) {
+                Text("ホーム画面表示名: \(LegalCopy.displayName)")
+                Text("最終更新: \(LegalCopy.lastUpdated)")
             }
 
-            Section("プライバシーポリシー") {
-                Text("Freeプランでは、カード内容は端末内に保存されます。Plus / Proでクラウド同期を利用する場合、Sign in with AppleまたはGoogleログインの情報とカード内容をFirebaseに保存します。広告目的のトラッキングや第三者広告SDKは使用しません。")
-                Text("保存される可能性がある情報: メールアドレスまたはユーザーID、カード本文、タグ、作成/更新日時、購入状態。")
-                Text("ユーザーはアプリ内でカードを削除できます。クラウド同期利用時は、同期ステータスのメニューからログアウトとクラウドアカウント削除を行えます。サポート窓口からのデータ削除依頼も受け付けます。")
-            }
-
-            Section("利用規約") {
-                Text("ユーザーは、自分が権利を持つ内容、または利用許諾を得た内容だけを保存してください。違法な内容、第三者の権利を侵害する内容、秘密保持義務に反する内容の保存は禁止します。")
-                Text("Plus / Proは自動更新サブスクリプションです。購入はApple IDに請求され、更新や解約はApp Storeのサブスクリプション管理で行います。")
-                Text("Freeの追加保存枠は消耗型アイテムです。購入後、Freeプランのローカル保存上限に加算されます。")
-            }
-
-            Section("権利表記") {
-                Text("Katachi for Developersのアプリ名、UI、コード、ドキュメントはAnemosが保有または管理します。Apple、App Store、Firebase、Googleは各社の商標です。本アプリはApple、Google、Firebaseの公式アプリではありません。")
-            }
+            LegalCopySection(title: "アプリについて", items: LegalCopy.serviceSummary)
+            LegalCopySection(title: "プライバシーポリシー", items: LegalCopy.privacyItems)
+            LegalCopySection(title: "利用規約", items: LegalCopy.termsItems)
+            LegalCopySection(title: "権利表記", items: LegalCopy.rightsItems)
         }
         .navigationTitle("法務・プライバシー")
         .toolbar {
@@ -1709,9 +2482,15 @@ private struct ActiveFiltersRow: View {
     }
 }
 
+private enum IdeaCardProminence {
+    case regular
+    case featured
+}
+
 private struct IdeaCardView: View {
     let idea: Idea
     let kindOptions: [IdeaKindOption]
+    let prominence: IdeaCardProminence
 
     private var shownTags: [String] {
         Array(idea.tags.prefix(3))
@@ -1730,10 +2509,8 @@ private struct IdeaCardView: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
-                if idea.isFavorite {
-                    Image(systemName: "star.fill")
-                        .foregroundStyle(.yellow)
-                }
+                Color.clear
+                    .frame(width: 34, height: 34)
             }
 
             if !idea.concept.isEmpty {
@@ -1750,6 +2527,9 @@ private struct IdeaCardView: View {
                     tint: tintColor(forKindRaw: idea.kindRaw)
                 )
                 IdeaBadge(label: idea.displayGroupName, tint: .blue)
+                if let dueAt = idea.dueAt {
+                    IdeaBadge(label: dueAt.formatted(date: .numeric, time: .omitted), tint: dueAt < Date() ? .red : .orange)
+                }
             }
 
             if !shownTags.isEmpty {
@@ -1784,14 +2564,14 @@ private struct IdeaCardView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(14)
+        .padding(prominence == .featured ? 14 : 12)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(prominence == .featured ? Color.blue.opacity(0.08) : Color(.secondarySystemBackground))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color(.separator), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(prominence == .featured ? Color.blue.opacity(0.28) : Color(.separator), lineWidth: 0.5)
         )
     }
 }
@@ -1830,6 +2610,7 @@ private struct IdeaDetailView: View {
                 LabelValueRow(label: "グループ", value: idea.displayGroupName)
                 LabelValueRow(label: "ステータス", value: idea.status.label)
                 LabelValueRow(label: "優先度", value: "\(idea.priority)")
+                LabelValueRow(label: "期限", value: idea.dueDateLabel)
                 LabelValueRow(label: "更新日時", value: idea.updatedAt.formatted(date: .abbreviated, time: .shortened))
             }
 
@@ -1868,15 +2649,34 @@ private struct IdeaDetailView: View {
             }
         }
         .navigationTitle("アイデア詳細")
+        .safeAreaInset(edge: .bottom) {
+            Button {
+                isPresentingEditor = true
+            } label: {
+                Label("編集", systemImage: "square.and.pencil")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+            .background(.bar)
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     ShareLink(item: idea.markdownExport) {
-                        Label("Markdown", systemImage: "doc.text")
+                        Label("Markdown詳細", systemImage: "doc.text")
                     }
 
                     ShareLink(item: idea.githubIssueExport) {
                         Label("GitHub Issue", systemImage: "number")
+                    }
+
+                    ShareLink(item: idea.reviewExport) {
+                        Label("レビュー用メモ", systemImage: "checklist")
                     }
                 } label: {
                     Image(systemName: "square.and.arrow.up")
@@ -1891,11 +2691,6 @@ private struct IdeaDetailView: View {
                 } label: {
                     Image(systemName: idea.isFavorite ? "star.fill" : "star")
                         .foregroundStyle(idea.isFavorite ? .yellow : .secondary)
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("編集") {
-                    isPresentingEditor = true
                 }
             }
         }
@@ -2029,6 +2824,8 @@ private struct LibrarySettingsView: View {
 
     @State private var newKindLabel = ""
     @State private var newGroupName = ""
+    @State private var newGroupIconName = "folder"
+    @State private var newGroupColorName = "blue"
 
     private var kindOptions: [IdeaKindOption] {
         IdeaKindCatalog.options(from: kindOptionsData)
@@ -2042,12 +2839,31 @@ private struct LibrarySettingsView: View {
         Form {
             Section("グループ") {
                 ForEach(groupOptions) { group in
-                    Text(group.name)
+                    HStack(spacing: 10) {
+                        Image(systemName: group.iconName)
+                            .foregroundStyle(color(forGroupColorName: group.colorName))
+                            .frame(width: 24)
+                        Text(group.name)
+                        Spacer()
+                        Text(group.colorName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .onDelete(perform: deleteGroups)
 
-                HStack {
+                VStack(alignment: .leading, spacing: 10) {
                     TextField("新しいグループ", text: $newGroupName)
+                    Picker("アイコン", selection: $newGroupIconName) {
+                        ForEach(GroupAppearance.iconOptions, id: \.self) { iconName in
+                            Label(iconName, systemImage: iconName).tag(iconName)
+                        }
+                    }
+                    Picker("色", selection: $newGroupColorName) {
+                        ForEach(GroupAppearance.colorOptions, id: \.self) { colorName in
+                            Text(colorName).tag(colorName)
+                        }
+                    }
                     Button("追加", action: addGroup)
                         .disabled(newGroupName.trimmed.isEmpty)
                 }
@@ -2094,16 +2910,18 @@ private struct LibrarySettingsView: View {
             newGroupName = ""
             return
         }
-        options.append(IdeaGroupCatalog.makeCustomOption(name: name))
+        options.append(IdeaGroupOption(id: "group.\(UUID().uuidString)", name: name, iconName: newGroupIconName, colorName: newGroupColorName))
         groupOptionsData = IdeaGroupCatalog.encode(options)
         newGroupName = ""
+        newGroupIconName = "folder"
+        newGroupColorName = "blue"
     }
 
     private func deleteGroups(at offsets: IndexSet) {
         var options = groupOptions
         options.remove(atOffsets: offsets)
         if options.isEmpty {
-            options = [IdeaGroupOption(id: "group.inbox", name: IdeaGroupCatalog.defaultName)]
+            options = [IdeaGroupOption(id: "group.inbox", name: IdeaGroupCatalog.defaultName, iconName: "tray", colorName: "blue")]
         }
         groupOptionsData = IdeaGroupCatalog.encode(options)
     }
@@ -2152,6 +2970,8 @@ private struct IdeaEditorView: View {
     @State private var tagsText: String
     @State private var priority: Int
     @State private var isFavorite: Bool
+    @State private var hasDueDate: Bool
+    @State private var dueAt: Date
     @State private var isDetailExpanded: Bool
     @State private var saveErrorMessage: String?
 
@@ -2174,6 +2994,8 @@ private struct IdeaEditorView: View {
         _tagsText = State(initialValue: idea?.tags.joined(separator: ", ") ?? "")
         _priority = State(initialValue: idea?.priority ?? 3)
         _isFavorite = State(initialValue: idea?.isFavorite ?? false)
+        _hasDueDate = State(initialValue: idea?.dueAt != nil)
+        _dueAt = State(initialValue: idea?.dueAt ?? Date())
         _isDetailExpanded = State(initialValue: idea != nil)
     }
 
@@ -2251,6 +3073,11 @@ private struct IdeaEditorView: View {
 
                     Stepper(value: $priority, in: 1...5) {
                         Text("優先度: \(priority)")
+                    }
+
+                    Toggle("期限を設定", isOn: $hasDueDate)
+                    if hasDueDate {
+                        DatePicker("期限", selection: $dueAt, displayedComponents: .date)
                     }
 
                     Toggle("お気に入り", isOn: $isFavorite)
@@ -2352,6 +3179,7 @@ private struct IdeaEditorView: View {
         let cleanProjectName = IdeaGroupCatalog.storedName(from: projectName)
         let cleanTags = Idea.normalizeTags(from: tagsText)
         let cleanPriority = Idea.normalizePriority(priority)
+        let cleanDueAt = hasDueDate ? dueAt : nil
 
         if let editingIdea {
             editingIdea.title = resolvedTitle
@@ -2365,6 +3193,7 @@ private struct IdeaEditorView: View {
             editingIdea.tags = cleanTags
             editingIdea.priority = cleanPriority
             editingIdea.isFavorite = isFavorite
+            editingIdea.dueAt = cleanDueAt
             editingIdea.touch()
         } else {
             let newIdea = Idea(
@@ -2378,7 +3207,8 @@ private struct IdeaEditorView: View {
                 projectName: cleanProjectName,
                 tags: cleanTags,
                 priority: cleanPriority,
-                isFavorite: isFavorite
+                isFavorite: isFavorite,
+                dueAt: cleanDueAt
             )
             newIdea.kindValue = kindRaw
             modelContext.insert(newIdea)
@@ -2442,6 +3272,23 @@ private extension IdeaKind {
         case .article: return .mint
         case .note: return .brown
         }
+    }
+}
+
+private enum GroupAppearance {
+    static let iconOptions = ["folder", "tray", "hammer", "briefcase", "doc.text", "paintpalette", "lightbulb", "tag"]
+    static let colorOptions = ["blue", "green", "orange", "pink", "teal", "indigo", "gray"]
+}
+
+private func color(forGroupColorName name: String) -> Color {
+    switch name {
+    case "green": return .green
+    case "orange": return .orange
+    case "pink": return .pink
+    case "teal": return .teal
+    case "indigo": return .indigo
+    case "gray": return .gray
+    default: return .blue
     }
 }
 

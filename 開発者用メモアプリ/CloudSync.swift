@@ -48,6 +48,7 @@ struct IdeaCloudRecord: Codable, Equatable, Identifiable {
     let tags: [String]
     let priority: Int
     let isFavorite: Bool
+    let dueAt: Date?
     let createdAt: Date
     let updatedAt: Date
 
@@ -64,6 +65,7 @@ struct IdeaCloudRecord: Codable, Equatable, Identifiable {
         tags = idea.tags
         priority = idea.priority
         isFavorite = idea.isFavorite
+        dueAt = idea.dueAt
         createdAt = idea.createdAt
         updatedAt = idea.updatedAt
     }
@@ -108,7 +110,7 @@ enum CloudSyncState: Equatable {
         case .ready:
             return "Plus / Proのクラウド保存が使えます。"
         case .syncing:
-            return "アイデアをFirebaseへ保存しています。"
+            return "クラウドと端末のアイデアを同期しています。"
         case .synced(let date):
             return "最終同期: \(date.formatted(date: .abbreviated, time: .shortened))"
         case .failed(let message):
@@ -306,6 +308,93 @@ final class CloudSyncManager: ObservableObject {
 #endif
     }
 
+    func fetchCloudIdeas(plan: AppPlan, pageSize: Int = 100) async -> [IdeaCloudRecord]? {
+        guard plan.usesCloudStorage else {
+            state = .localOnly
+            return nil
+        }
+
+#if canImport(FirebaseCore) && canImport(FirebaseAuth) && canImport(FirebaseFirestore)
+        guard FirebaseApp.app() != nil else {
+            state = .needsConfiguration("GoogleService-Info.plistを追加してFirebaseを初期化してください。")
+            return nil
+        }
+        guard let userID = Auth.auth().currentUser?.uid else {
+            state = .signedOut
+            return nil
+        }
+
+        state = .syncing
+        do {
+            let database = Firestore.firestore()
+            let ideasReference = database
+                .collection("users")
+                .document(userID)
+                .collection("ideas")
+
+            var records: [IdeaCloudRecord] = []
+            var lastDocument: QueryDocumentSnapshot?
+
+            repeat {
+                var query: Query = ideasReference
+                    .order(by: "updatedAt", descending: true)
+                    .limit(to: max(pageSize, 1))
+
+                if let lastDocument {
+                    query = query.start(afterDocument: lastDocument)
+                }
+
+                let snapshot = try await query.getDocuments()
+                records += snapshot.documents.compactMap { IdeaCloudRecord(documentData: $0.data()) }
+                lastDocument = snapshot.documents.last
+
+                if snapshot.documents.count < max(pageSize, 1) {
+                    break
+                }
+            } while lastDocument != nil
+
+            return records
+        } catch {
+            state = .failed("Firebaseからの復元に失敗しました: \(error.localizedDescription)")
+            return nil
+        }
+#else
+        state = .needsConfiguration("Firestore SDKを追加すると、クラウドから復元できます。")
+        return nil
+#endif
+    }
+
+    func deleteCloudIdea(id: UUID, plan: AppPlan) async {
+        guard plan.usesCloudStorage else {
+            return
+        }
+
+#if canImport(FirebaseCore) && canImport(FirebaseAuth) && canImport(FirebaseFirestore)
+        guard FirebaseApp.app() != nil else {
+            state = .needsConfiguration("GoogleService-Info.plistを追加してFirebaseを初期化してください。")
+            return
+        }
+        guard let userID = Auth.auth().currentUser?.uid else {
+            state = .signedOut
+            return
+        }
+
+        do {
+            try await Firestore.firestore()
+                .collection("users")
+                .document(userID)
+                .collection("ideas")
+                .document(id.uuidString)
+                .delete()
+        } catch {
+            state = .failed("クラウド上の削除に失敗しました: \(error.localizedDescription)")
+        }
+#else
+        _ = id
+        state = .needsConfiguration("Firestore SDKを追加すると、クラウド上のカード削除も同期できます。")
+#endif
+    }
+
     func deleteCloudAccount() async {
 #if canImport(FirebaseCore) && canImport(FirebaseAuth) && canImport(FirebaseFirestore)
         guard FirebaseApp.app() != nil else {
@@ -413,7 +502,7 @@ private extension UIViewController {
 
 extension IdeaCloudRecord {
     var firestoreData: [String: Any] {
-        [
+        var data: [String: Any] = [
             "id": id,
             "title": title,
             "kind": kind,
@@ -429,7 +518,46 @@ extension IdeaCloudRecord {
             "createdAt": createdAt,
             "updatedAt": updatedAt
         ]
+        if let dueAt {
+            data["dueAt"] = dueAt
+        }
+        return data
     }
+
+#if canImport(FirebaseFirestore)
+    init?(documentData data: [String: Any]) {
+        guard let id = data["id"] as? String,
+              UUID(uuidString: id) != nil else {
+            return nil
+        }
+
+        self.id = id
+        title = data["title"] as? String ?? ""
+        kind = data["kind"] as? String ?? IdeaKind.feature.rawValue
+        status = data["status"] as? String ?? IdeaStatus.inbox.rawValue
+        concept = data["concept"] as? String ?? ""
+        rationale = data["rationale"] as? String ?? ""
+        approach = data["approach"] as? String ?? ""
+        nextAction = data["nextAction"] as? String ?? ""
+        projectName = data["projectName"] as? String ?? ""
+        tags = data["tags"] as? [String] ?? []
+        priority = data["priority"] as? Int ?? 3
+        isFavorite = data["isFavorite"] as? Bool ?? false
+        dueAt = Self.dateValue(from: data["dueAt"])
+        createdAt = Self.dateValue(from: data["createdAt"]) ?? Date()
+        updatedAt = Self.dateValue(from: data["updatedAt"]) ?? createdAt
+    }
+
+    private static func dateValue(from value: Any?) -> Date? {
+        if let date = value as? Date {
+            return date
+        }
+        if let timestamp = value as? Timestamp {
+            return timestamp.dateValue()
+        }
+        return nil
+    }
+#endif
 }
 
 private extension Array {

@@ -123,6 +123,90 @@ enum PurchaseResultState: Equatable {
     }
 }
 
+enum PromotionCodeEffect: Equatable {
+    case plan(AppPlan)
+    case extraSlots(Int)
+
+    var message: String {
+        switch self {
+        case .plan(let plan):
+            return "\(plan.label)を有効化しました。"
+        case .extraSlots(let slots):
+            return "保存枠を+\(slots)件追加しました。"
+        }
+    }
+}
+
+struct PromotionCode: Identifiable, Equatable {
+    let id: String
+    let effect: PromotionCodeEffect
+    let note: String
+    let expiresAt: Date?
+    let localRedemptionLimit: Int?
+
+    init(
+        id: String,
+        effect: PromotionCodeEffect,
+        note: String,
+        expiresAt: Date? = nil,
+        localRedemptionLimit: Int? = 1
+    ) {
+        self.id = id
+        self.effect = effect
+        self.note = note
+        self.expiresAt = expiresAt
+        self.localRedemptionLimit = localRedemptionLimit
+    }
+
+    static let all: [PromotionCode] = [
+        PromotionCode(
+            id: "KFD-PRO-C4C0-365E-91DD-8CAD-29D0-AFD4-1A66-D7EB",
+            effect: .plan(.pro),
+            note: "開発者・運営確認用のProコード",
+            localRedemptionLimit: nil
+        ),
+        PromotionCode(
+            id: "KFD-PLUS-6B4D-846F-D7C0-86BC-A3AB-1C9B-CE34-EFF8",
+            effect: .plan(.plus),
+            note: "開発者・運営確認用のPlusコード",
+            localRedemptionLimit: nil
+        ),
+        PromotionCode(
+            id: "KATACHI-LAUNCH-10",
+            effect: .extraSlots(10),
+            note: "リリース記念の保存枠+10",
+            expiresAt: DateComponents(calendar: .current, year: 2026, month: 12, day: 31).date
+        ),
+        PromotionCode(
+            id: "KATACHI-LAUNCH-25",
+            effect: .extraSlots(25),
+            note: "キャンペーン用の保存枠+25",
+            expiresAt: DateComponents(calendar: .current, year: 2026, month: 12, day: 31).date
+        )
+    ]
+
+    var isCurrentlyValid: Bool {
+        guard let expiresAt else {
+            return true
+        }
+        return Date() <= expiresAt
+    }
+
+    static func normalized(_ rawValue: String) -> String {
+        rawValue
+            .trimmed
+            .uppercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "ー", with: "-")
+            .replacingOccurrences(of: "−", with: "-")
+    }
+
+    static func find(_ rawValue: String) -> PromotionCode? {
+        let code = normalized(rawValue)
+        return all.first { $0.id == code }
+    }
+}
+
 @MainActor
 final class PurchaseManager: ObservableObject {
     @Published private(set) var products: [Product] = []

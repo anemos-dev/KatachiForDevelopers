@@ -70,16 +70,40 @@ enum IdeaKindCatalog {
 struct IdeaGroupOption: Codable, Identifiable, Equatable, Hashable {
     let id: String
     var name: String
+    var iconName: String
+    var colorName: String
+
+    init(id: String, name: String, iconName: String = "folder", colorName: String = "blue") {
+        self.id = id
+        self.name = name
+        self.iconName = iconName
+        self.colorName = colorName
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case iconName
+        case colorName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        iconName = try container.decodeIfPresent(String.self, forKey: .iconName) ?? "folder"
+        colorName = try container.decodeIfPresent(String.self, forKey: .colorName) ?? "blue"
+    }
 }
 
 enum IdeaGroupCatalog {
     static let storageKey = "settings.ideaGroupOptions"
     static let defaultName = "Inbox"
     static let defaultOptions = [
-        IdeaGroupOption(id: "group.inbox", name: defaultName),
-        IdeaGroupOption(id: "group.personal", name: "個人開発"),
-        IdeaGroupOption(id: "group.work", name: "仕事"),
-        IdeaGroupOption(id: "group.article", name: "記事")
+        IdeaGroupOption(id: "group.inbox", name: defaultName, iconName: "tray", colorName: "blue"),
+        IdeaGroupOption(id: "group.personal", name: "個人開発", iconName: "hammer", colorName: "green"),
+        IdeaGroupOption(id: "group.work", name: "仕事", iconName: "briefcase", colorName: "orange"),
+        IdeaGroupOption(id: "group.article", name: "記事", iconName: "doc.text", colorName: "pink")
     ]
 
     static func options(from data: String) -> [IdeaGroupOption] {
@@ -418,6 +442,7 @@ final class Idea {
     var tags: [String]
     var priority: Int
     var isFavorite: Bool
+    var dueAt: Date?
     var createdAt: Date
     var updatedAt: Date
 
@@ -434,6 +459,7 @@ final class Idea {
         tags: [String] = [],
         priority: Int = 3,
         isFavorite: Bool = false,
+        dueAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -449,6 +475,7 @@ final class Idea {
         self.tags = Self.normalizeTags(tags)
         self.priority = Self.normalizePriority(priority)
         self.isFavorite = isFavorite
+        self.dueAt = dueAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -531,6 +558,7 @@ extension Idea {
         appendSection("なぜ良さそうか", rationale, to: &sections)
         appendSection("どう作るか / どう試すか", approach, to: &sections)
         appendSection("次にやること", nextAction, to: &sections)
+        appendSection("チェックリスト", checklistMarkdown, to: &sections)
 
         return sections.joined(separator: "\n\n")
     }
@@ -542,6 +570,7 @@ extension Idea {
         appendSection("背景 / 良さそうな理由", rationale, to: &sections)
         appendSection("実装・検証方針", approach, to: &sections)
         appendSection("次のアクション", nextAction, to: &sections)
+        appendSection("チェックリスト", checklistMarkdown, to: &sections)
 
         let labels = ([kind.label, status.label] + tags.map { "tag: \($0)" }).joined(separator: ", ")
         sections.append(
@@ -551,6 +580,7 @@ extension Idea {
             - ステータス: \(status.label)
             - 優先度: \(priority)
             - グループ: \(displayGroupName)
+            - 期限: \(dueDateLabel)
             - ラベル候補: \(labels)
             """
         )
@@ -558,18 +588,56 @@ extension Idea {
         return sections.joined(separator: "\n\n")
     }
 
+    var reviewExport: String {
+        """
+        # \(displayTitle)
+
+        ## 次にやること
+        \(nextAction.trimmed.isEmpty ? "- [ ] 未設定" : "- [ ] \(nextAction.trimmed)")
+
+        ## 判断メモ
+        - 種類: \(kind.label)
+        - ステータス: \(status.label)
+        - 優先度: \(priority)
+        - グループ: \(displayGroupName)
+        - 期限: \(dueDateLabel)
+
+        ## 内容
+        \(concept.trimmed.isEmpty ? "未入力" : concept.trimmed)
+        """
+    }
+
     private var metadataMarkdown: String {
         var lines = [
             "- 種類: \(kind.label)",
             "- ステータス: \(status.label)",
             "- 優先度: \(priority)",
-            "- グループ: \(displayGroupName)"
+            "- グループ: \(displayGroupName)",
+            "- 期限: \(dueDateLabel)"
         ]
 
         if !tags.isEmpty {
             lines.append("- タグ: \(tags.map { "#\($0)" }.joined(separator: " "))")
         }
 
+        return lines.joined(separator: "\n")
+    }
+
+    var dueDateLabel: String {
+        guard let dueAt else {
+            return "未設定"
+        }
+        return dueAt.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private var checklistMarkdown: String {
+        var lines: [String] = []
+        if !nextAction.trimmed.isEmpty {
+            lines.append("- [ ] \(nextAction.trimmed)")
+        }
+        if !approach.trimmed.isEmpty {
+            lines.append("- [ ] 実装・検証方針を確認する")
+        }
         return lines.joined(separator: "\n")
     }
 

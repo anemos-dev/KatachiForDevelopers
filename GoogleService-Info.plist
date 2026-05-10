@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>1046721158352-vb4di1ll53ujo6b5frip52ccaf63ibr8.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.1046721158352-vb4di1ll53ujo6b5frip52ccaf63ibr8</string>
+	<key>API_KEY</key>
+	<string>AIzaSyAIGpVCYH3ln6v4ZtMpkfP_lbilyE0Li30</string>
+	<key>GCM_SENDER_ID</key>
+	<string>1046721158352</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.Anemos.KatachiDevelopers</string>
+	<key>PROJECT_ID</key>
+	<string>katachi-for-developers</string>
+	<key>STORAGE_BUCKET</key>
+	<string>katachi-for-developers.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:1046721158352:ios:ecc6996722e3870ae3d2d5</string>
+</dict>
+</plist>

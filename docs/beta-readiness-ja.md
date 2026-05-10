@@ -1,6 +1,6 @@
 # Katachi for Developers βテスト実施ガイド
 
-最終更新: 2026-04-11
+最終更新: 2026-05-09
 
 ## 1. 現在の到達点
 
@@ -8,7 +8,7 @@
 - MVP機能実装済み
 - アプリ本体ビルド成功（署名無効の検証ビルド）
 - test build（`build-for-testing`）成功
-- Release archive生成成功（`/tmp/Katachi.xcarchive`）
+- Release archiveは提出前に再生成する
 
 ## 2. 実装済み機能（β対象）
 
@@ -20,7 +20,12 @@
 - お気に入り切替
 - 検索（複数項目横断）
 - フィルタ（種類 / ステータス / お気に入り）
-- 並び替え（更新日 / 作成日 / 優先度）
+- 並び替え（検索画面: 更新日 / 作成日 / 優先度）
+- 期限メモ
+- 検索履歴
+- グループの色とアイコン
+- 特典コード/紹介コード
+- Firebase / Googleログイン / Sign in with Apple / Firestore同期
 
 ## 3. ローカル検証コマンド
 
@@ -56,7 +61,7 @@ xcodebuild \
 
 1. Signing & CapabilitiesでTeamを設定（現在は未設定）
 2. Bundle Identifier確認（現在: `com.Anemos.KatachiDevelopers`）
-3. Version / Build番号を更新（現在: `0.1.0` / `1`）
+3. Version / Build番号を確認（現在: `1.0.0` / `1`）
 4. App Iconを最終版へ差し替え
 5. Xcode GUIで署名付きArchiveを作成
 6. App Store ConnectへUpload
@@ -101,6 +106,16 @@ xcodebuild \
 - 詳細画面から編集に入れる
 - 保存後に一覧へ更新内容が反映される
 - 次アクション、タグ、ステータス変更が保持される
+- 期限の設定/解除が保持される
+- 共有メニューからMarkdown詳細、GitHub Issue、レビュー用メモを出力できる
+
+### 5.5 課金/同期フロー
+
+- Pro確認用特典コードでPro状態にできる
+- GoogleログインとSign in with Appleが通る
+- Firestoreへの同期、復元、削除が通る
+- クラウドアカウント削除が通る
+- SandboxでPlus / Pro / 追加保存枠の購入と復元が通る
 
 ## 6. 既知の運用注意点
 
