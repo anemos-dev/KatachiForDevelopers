@@ -3,24 +3,51 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Katachi for Developers</title>
+  <title>ANEMOS | Katachi for Developers</title>
   <style>
-    body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN",sans-serif;line-height:1.7;max-width:760px;margin:40px auto;padding:0 20px;color:#1f2937}
+    :root{color-scheme:light}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN",sans-serif;line-height:1.7;max-width:860px;margin:0 auto;padding:48px 20px;color:#1f2937;background:#fff}
     a{color:#2563eb}
-    ul{padding-left:20px}
-    .card{padding:20px;border:1px solid #e5e7eb;border-radius:12px;background:#fafafa}
+    h1,h2{line-height:1.2;margin:0 0 12px}
+    p{margin:0 0 14px}
+    ul{padding-left:20px;margin:0}
+    .eyebrow{font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:#6b7280;margin-bottom:10px}
+    .hero{padding:28px 0 20px;border-bottom:1px solid #e5e7eb}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:24px}
+    .card{padding:18px;border:1px solid #e5e7eb;border-radius:14px;background:#fafafa}
+    .muted{color:#6b7280}
+    .label{display:inline-block;font-size:13px;font-weight:600;color:#0f172a;background:#e0f2fe;padding:4px 10px;border-radius:999px;margin-bottom:14px}
   </style>
 </head>
 <body>
-  <h1>Katachi for Developers</h1>
-  <p>Support, privacy, and terms pages for App Store review and user support.</p>
-  <div class="card">
-    <ul>
-      <li><a href="./support.html">Support</a></li>
-      <li><a href="./privacy-policy.html">Privacy Policy</a></li>
-      <li><a href="./terms-of-use.html">Terms of Use</a></li>
-      <li><a href="./privacy-choices.html">Privacy Choices</a></li>
-    </ul>
+  <div class="hero">
+    <div class="eyebrow">ANEMOS</div>
+    <h1>Katachi for Developers</h1>
+    <p class="muted">思いつきをすばやく保存し、あとで実装に戻しやすくするためのメモアプリです。</p>
+    <p class="label">Official Support Pages</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Support</h2>
+      <p>アプリの使い方、購入、同期、データ削除に関する案内です。</p>
+      <p><a href="./support.html">Support ページを見る</a></p>
+    </div>
+    <div class="card">
+      <h2>Privacy Policy</h2>
+      <p>取得する情報、利用目的、クラウド同期時の取り扱いを記載しています。</p>
+      <p><a href="./privacy-policy.html">Privacy Policy を読む</a></p>
+    </div>
+    <div class="card">
+      <h2>Terms of Use</h2>
+      <p>利用条件、免責、サブスクリプション、サービス終了時の扱いです。</p>
+      <p><a href="./terms-of-use.html">Terms of Use を読む</a></p>
+    </div>
+    <div class="card">
+      <h2>Privacy Choices</h2>
+      <p>トラッキングに関する考え方と、ユーザー向けの案内です。</p>
+      <p><a href="./privacy-choices.html">Privacy Choices を読む</a></p>
+    </div>
   </div>
 </body>
 </html>
