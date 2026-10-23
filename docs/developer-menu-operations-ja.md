@@ -36,12 +36,13 @@
 
 同期ワークフローには `contents: write` を指定しています。ブランチルールなどでActionsのpushが拒否される場合は、GitHub側のルールを確認してください。
 
-## 現在のセットアップ状況
+## 初期導入の状態
 
-- GitHubに `developer-menu` ブランチを `main` 起点で作成済みです。
-- ローカルの `developer-menu` は `origin/developer-menu` を追跡します。
-- 開発者メニューとActionsの変更は現在ローカルにあります。commit/push前なので、GitHub Actionsへの登録と実行はまだ有効になっていません。
-- 既存の未コミット変更を含め、push前に `git status` と差分を確認してください。
+- GitHubに `developer-menu` ブランチがあり、開発者メニューを保持しています。
+- iOSビルドと `main` からの自動同期を行うActionsは、`main` と `developer-menu` に登録済みです。
+- `main` へのpushで `developer-menu` への同期が起動します。初期導入後の同期ジョブは成功しました。
+- 日常の開発者メニュー変更は `developer-menu` 向けのPull Requestで進め、通常版の変更は `main` に取り込みます。`main` の更新はActionsが開発ブランチへ反映します。
+- push前には `git status` と差分を確認し、意図しない未コミット変更を含めないようにします。
 
 ## 検証
 
