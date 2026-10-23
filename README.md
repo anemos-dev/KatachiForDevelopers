@@ -71,6 +71,7 @@ Do not commit production secrets or private service credentials.
 ## Documentation
 
 - [仕様書](docs/spec-ja.md)
+- [開発者メニューとブランチ運用](docs/developer-menu-operations-ja.md)
 - [デザイン方針](docs/design.md)
 - [収益化セットアップ](docs/monetization-setup-ja.md)
 - [β準備チェックリスト](docs/beta-readiness-ja.md)
