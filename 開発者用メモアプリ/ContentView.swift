@@ -524,6 +524,26 @@ struct ContentView: View {
                 }
             }
 
+#if DEBUG
+            Section("開発") {
+                NavigationLink {
+                    DeveloperMenuView(
+                        currentPlan: currentPlan,
+                        cloudSyncState: cloudSyncManager.state,
+                        hasCheckedEntitlements: purchaseManager.hasCheckedEntitlements,
+                        lastSuccessfulSyncAt: lastSuccessfulCloudSyncAt
+                    )
+                } label: {
+                    Label("開発者メニュー", systemImage: "hammer.fill")
+                }
+                .accessibilityIdentifier("developerMenuLink")
+
+                Text("Debugビルドの実行環境、保存状況、同期状態を確認できます。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+#endif
+
             Section {
                 DeferredExportShareButton(
                     urlProvider: {
