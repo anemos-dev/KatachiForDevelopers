@@ -20,7 +20,13 @@ final class KatachiUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["Katachi"].waitForExistence(timeout: 3))
+        let agreement = app.switches["上記の利用規約とプライバシーポリシーに同意します"]
+        if agreement.waitForExistence(timeout: 3) {
+            agreement.tap()
+            app.buttons["同意して開始"].tap()
+        }
+
+        XCTAssertTrue(app.navigationBars["ホーム"].waitForExistence(timeout: 3))
     }
 
     @MainActor

@@ -2,9 +2,13 @@ import SwiftUI
 import SwiftData
 import AuthenticationServices
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var ideas: [Idea]
+    @Query(sort: \Idea.updatedAt, order: .reverse) private var ideas: [Idea]
 
     @AppStorage("legal.acceptedTermsVersion") private var acceptedTermsVersion = ""
     @AppStorage("onboarding.didInsertSampleIdeas") private var didInsertSampleIdeas = false
@@ -34,6 +38,7 @@ struct ContentView: View {
     @State private var isPresentingCreateSheet = false
     @State private var isPresentingBillingSheet = false
     @State private var isPresentingLegalSheet = false
+    @State private var isShowingSearchResults = false
     @State private var quickCaptureText = ""
     @State private var quickCaptureSuccessMessage: String?
     @State private var quickCaptureResetID = UUID()
@@ -47,6 +52,7 @@ struct ContentView: View {
     @State private var homeVisibleCount = IdeaPaging.pageSize
     @State private var searchVisibleCount = IdeaPaging.pageSize
     @State private var groupVisibleCounts: [String: Int] = [:]
+    @State private var cachedFilteredIdeas: [Idea] = []
 
     var body: some View {
         Group {
@@ -87,6 +93,10 @@ struct ContentView: View {
                         await purchaseManager.start()
                         syncStoredPlanWithEntitlements()
                         cloudSyncManager.refresh(for: currentPlan)
+                        refreshFilteredIdeasCache()
+                    }
+                    .onAppear {
+                        refreshFilteredIdeasCache()
                     }
                     .onChange(of: purchaseManager.purchasedProductIDs) { _, _ in
                         syncStoredPlanWithEntitlements()
@@ -95,23 +105,35 @@ struct ContentView: View {
                     .onChange(of: currentPlan) { _, newPlan in
                         cloudSyncManager.refresh(for: newPlan)
                     }
+                    .onChange(of: ideas.count) { _, _ in
+                        refreshDerivedIdeaViews()
+                    }
+                    .onChange(of: latestIdeaUpdateTimestamp) { _, _ in
+                        refreshDerivedIdeaViews()
+                    }
                     .onChange(of: searchText) { _, _ in
                         searchVisibleCount = IdeaPaging.pageSize
+                        refreshFilteredIdeasCache()
                     }
                     .onChange(of: selectedKindRaw) { _, _ in
                         searchVisibleCount = IdeaPaging.pageSize
+                        refreshFilteredIdeasCache()
                     }
                     .onChange(of: selectedGroupName) { _, _ in
                         searchVisibleCount = IdeaPaging.pageSize
+                        refreshFilteredIdeasCache()
                     }
                     .onChange(of: selectedStatus) { _, _ in
                         searchVisibleCount = IdeaPaging.pageSize
+                        refreshFilteredIdeasCache()
                     }
                     .onChange(of: favoritesOnly) { _, _ in
                         searchVisibleCount = IdeaPaging.pageSize
+                        refreshFilteredIdeasCache()
                     }
                     .onChange(of: sortOption) { _, _ in
                         resetVisibleIdeaPages()
+                        refreshFilteredIdeasCache()
                     }
                     .confirmationDialog(
                         "このカードを削除しますか？",
@@ -133,6 +155,9 @@ struct ContentView: View {
                             kindOptionsData: $ideaKindOptionsData,
                             groupOptionsData: $ideaGroupOptionsData
                         )
+                    }
+                    .navigationDestination(isPresented: $isShowingSearchResults) {
+                        searchResultsContent
                     }
                 }
             } else {
@@ -208,6 +233,52 @@ struct ContentView: View {
                         .listRowBackground(Color.clear)
                 }
 
+                if !nextActionIdeas.isEmpty || !dueSoonIdeas.isEmpty || !uncategorizedIdeas.isEmpty {
+                    Section("今見るカード") {
+                        if !nextActionIdeas.isEmpty {
+                            SmartIdeaShelfRow(
+                                title: "次にやること",
+                                subtitle: "\(nextActionIdeas.count)件のアクションがあります",
+                                iconName: "checklist",
+                                tint: .green,
+                                ideas: Array(nextActionIdeas.prefix(3)),
+                                kindOptions: kindOptions,
+                                groupOptions: groupOptions,
+                                selectAction: { selectedIdea = $0 }
+                            )
+                            .listRowSeparator(.hidden)
+                        }
+
+                        if !dueSoonIdeas.isEmpty {
+                            SmartIdeaShelfRow(
+                                title: "期限が近い",
+                                subtitle: "\(dueSoonIdeas.count)件を確認できます",
+                                iconName: "calendar",
+                                tint: .orange,
+                                ideas: Array(dueSoonIdeas.prefix(3)),
+                                kindOptions: kindOptions,
+                                groupOptions: groupOptions,
+                                selectAction: { selectedIdea = $0 }
+                            )
+                            .listRowSeparator(.hidden)
+                        }
+
+                        if !uncategorizedIdeas.isEmpty {
+                            SmartIdeaShelfRow(
+                                title: "未分類",
+                                subtitle: "Inboxに\(uncategorizedIdeas.count)件あります",
+                                iconName: "tray",
+                                tint: .blue,
+                                ideas: Array(uncategorizedIdeas.prefix(3)),
+                                kindOptions: kindOptions,
+                                groupOptions: groupOptions,
+                                selectAction: { selectedIdea = $0 }
+                            )
+                            .listRowSeparator(.hidden)
+                        }
+                    }
+                }
+
                 Section("最近のカード") {
                     ForEach(pagedHomeIdeas) { idea in
                         ideaNavigationLink(for: idea)
@@ -236,7 +307,7 @@ struct ContentView: View {
                         groupDetailContent(for: group.name)
                     } label: {
                         GroupListRow(
-                            name: group.name,
+                            group: group,
                             count: countIdeas(in: group.name)
                         )
                     }
@@ -286,11 +357,21 @@ struct ContentView: View {
     private var searchContent: some View {
         List {
             Section {
-                TextField("タイトル・内容・タグで検索", text: $searchText)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .onSubmit(recordCurrentSearchQuery)
+                HStack(spacing: 10) {
+                    TextField("タイトル・内容・タグで検索", text: $searchText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                        .onSubmit(showSearchResults)
+
+                    Button(action: showSearchResults) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.headline)
+                            .frame(width: 38, height: 38)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("検索")
+                }
 
                 if !recentSearchQueries.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -359,6 +440,23 @@ struct ContentView: View {
                     kindOptions: kindOptions
                 )
             }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var searchResultsContent: some View {
+        List {
+            if hasActiveFilters {
+                ActiveFiltersRow(
+                    selectedKindRaw: selectedKindRaw,
+                    selectedGroupName: selectedGroupName,
+                    selectedStatus: selectedStatus,
+                    favoritesOnly: favoritesOnly,
+                    kindOptions: kindOptions
+                )
+            }
 
             if filteredIdeas.isEmpty {
                 EmptyResultsRow(
@@ -382,6 +480,7 @@ struct ContentView: View {
                 }
             }
         }
+        .navigationTitle("検索結果")
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(Color(.systemGroupedBackground))
@@ -423,6 +522,46 @@ struct ContentView: View {
                 } label: {
                     Label("種類・グループの管理", systemImage: "slider.horizontal.3")
                 }
+            }
+
+            Section {
+                DeferredExportShareButton(
+                    urlProvider: {
+                        exportFileURL(
+                            contents: makeMarkdownExport(for: ideas),
+                            filename: "Katachi全カード",
+                            fileExtension: "md"
+                        )
+                    }
+                ) {
+                    Label("Markdownで書き出す", systemImage: "doc.text")
+                }
+                DeferredExportShareButton(
+                    urlProvider: {
+                        exportFileURL(
+                            contents: makeCSVExport(for: ideas),
+                            filename: "Katachi全カード",
+                            fileExtension: "csv"
+                        )
+                    }
+                ) {
+                    Label("CSVで書き出す", systemImage: "tablecells")
+                }
+                DeferredExportShareButton(
+                    urlProvider: {
+                        exportFileURL(
+                            contents: makeJSONExport(for: ideas),
+                            filename: "Katachi全カード",
+                            fileExtension: "json"
+                        )
+                    }
+                ) {
+                    Label("JSONで書き出す", systemImage: "curlybraces")
+                }
+            } header: {
+                Text("バックアップ")
+            } footer: {
+                Text("端末内のカードをまとめて共有・保存できます。重要な内容は定期的に外部へ退避してください。")
             }
 
             Section {
@@ -576,6 +715,10 @@ struct ContentView: View {
     }
 
     private var filteredIdeas: [Idea] {
+        cachedFilteredIdeas
+    }
+
+    private func makeFilteredIdeas() -> [Idea] {
         let result = ideas.filter { idea in
             matchesSearch(idea)
                 && matchesKind(idea)
@@ -600,9 +743,101 @@ struct ContentView: View {
     }
 
     private var homeSortedIdeas: [Idea] {
-        ideas.sorted { lhs, rhs in
-            lhs.updatedAt > rhs.updatedAt
+        ideas
+    }
+
+    private var nextActionIdeas: [Idea] {
+        homeSortedIdeas.filter { !$0.nextAction.trimmed.isEmpty && $0.status != .done }
+    }
+
+    private var dueSoonIdeas: [Idea] {
+        let now = Date()
+        let sevenDaysLater = Calendar.current.date(byAdding: .day, value: 7, to: now) ?? now
+        return homeSortedIdeas
+            .filter { idea in
+                guard let dueAt = idea.dueAt, idea.status != .done else {
+                    return false
+                }
+                return dueAt <= sevenDaysLater
+            }
+            .sorted { lhs, rhs in
+                (lhs.dueAt ?? .distantFuture) < (rhs.dueAt ?? .distantFuture)
+            }
+    }
+
+    private var uncategorizedIdeas: [Idea] {
+        homeSortedIdeas.filter { $0.displayGroupName == IdeaGroupCatalog.defaultName && $0.status == .inbox }
+    }
+
+    private var latestIdeaUpdateTimestamp: Double {
+        ideas.first?.updatedAt.timeIntervalSince1970 ?? 0
+    }
+
+    private func makeMarkdownExport(for ideas: [Idea]) -> String {
+        ideas
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .map(\.markdownExport)
+            .joined(separator: "\n\n---\n\n")
+    }
+
+    private func makeCSVExport(for ideas: [Idea]) -> String {
+        let header = [
+            "id",
+            "title",
+            "kind",
+            "status",
+            "group",
+            "priority",
+            "favorite",
+            "dueAt",
+            "tags",
+            "concept",
+            "rationale",
+            "approach",
+            "nextAction",
+            "createdAt",
+            "updatedAt"
+        ].joined(separator: ",")
+
+        let rows = ideas
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .map { idea in
+                [
+                    idea.id.uuidString,
+                    idea.displayTitle,
+                    IdeaKindCatalog.label(for: idea.kindRaw, options: kindOptions),
+                    idea.status.label,
+                    idea.displayGroupName,
+                    "\(idea.priority)",
+                    idea.isFavorite ? "true" : "false",
+                    idea.dueAt?.ISO8601Format() ?? "",
+                    idea.tags.joined(separator: " "),
+                    idea.concept,
+                    idea.rationale,
+                    idea.approach,
+                    idea.nextAction,
+                    idea.createdAt.ISO8601Format(),
+                    idea.updatedAt.ISO8601Format()
+                ]
+                .map(csvEscaped)
+                .joined(separator: ",")
+            }
+
+        return ([header] + rows).joined(separator: "\n")
+    }
+
+    private func makeJSONExport(for ideas: [Idea]) -> String {
+        let records = ideas
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .map { ExportIdeaRecord(idea: $0, kindOptions: kindOptions) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(records),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return "[]"
         }
+        return encoded
     }
 
     private var hasMoreHomeIdeas: Bool {
@@ -664,7 +899,7 @@ struct ContentView: View {
         let mergeSummary = mergeCloudRecords(cloudRecords)
         if mergeSummary.hasChanges {
             saveContext()
-            resetVisibleIdeaPages()
+            refreshDerivedIdeaViews()
         }
 
         if await cloudSyncManager.sync(ideas: changedIdeas, plan: currentPlan) != nil {
@@ -813,6 +1048,36 @@ struct ContentView: View {
             .scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
             .navigationTitle(groupName)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ExportShareMenu(
+                        markdownURLProvider: {
+                            exportFileURL(
+                                contents: makeMarkdownExport(for: groupIdeas),
+                                filename: groupName,
+                                fileExtension: "md"
+                            )
+                        },
+                        csvURLProvider: {
+                            exportFileURL(
+                                contents: makeCSVExport(for: groupIdeas),
+                                filename: groupName,
+                                fileExtension: "csv"
+                            )
+                        },
+                        jsonURLProvider: {
+                            exportFileURL(
+                                contents: makeJSONExport(for: groupIdeas),
+                                filename: groupName,
+                                fileExtension: "json"
+                            )
+                        },
+                        markdownLabel: "グループをMarkdownで共有",
+                        csvLabel: "グループをCSVで共有",
+                        jsonLabel: "グループをJSONで共有"
+                    )
+                }
+            }
         }
     }
 
@@ -821,7 +1086,13 @@ struct ContentView: View {
             Button {
                 selectedIdea = idea
             } label: {
-                IdeaCardView(idea: idea, kindOptions: kindOptions, prominence: prominence)
+                IdeaCardView(
+                    idea: idea,
+                    kindOptions: kindOptions,
+                    groupOptions: groupOptions,
+                    searchQuery: searchText,
+                    prominence: prominence
+                )
                     .padding(.vertical, 2)
             }
             .buttonStyle(.plain)
@@ -869,6 +1140,7 @@ struct ContentView: View {
         selectedStatus = nil
         favoritesOnly = false
         searchVisibleCount = IdeaPaging.pageSize
+        refreshFilteredIdeasCache()
     }
 
     private func matchesSearch(_ idea: Idea) -> Bool {
@@ -903,6 +1175,12 @@ struct ContentView: View {
         recentSearchQueriesData = RecentSearchStore.encodeAdding(cleaned, to: recentSearchQueries)
     }
 
+    private func showSearchResults() {
+        recordCurrentSearchQuery()
+        searchVisibleCount = IdeaPaging.pageSize
+        isShowingSearchResults = true
+    }
+
     private func matchesKind(_ idea: Idea) -> Bool {
         guard let selectedKindRaw else {
             return true
@@ -932,13 +1210,14 @@ struct ContentView: View {
         idea.isFavorite.toggle()
         idea.touch()
         saveContext()
+        refreshFilteredIdeasCache()
     }
 
     private func deleteIdea(_ idea: Idea) {
         let deletedIdeaID = idea.id
         modelContext.delete(idea)
         saveContext()
-        resetVisibleIdeaPages()
+        refreshDerivedIdeaViews()
 
         if currentPlan.usesCloudStorage {
             Task {
@@ -997,6 +1276,7 @@ struct ContentView: View {
         idea.kindValue = quickCaptureKindRaw
         modelContext.insert(idea)
         saveContext()
+        refreshDerivedIdeaViews()
         quickCaptureText = ""
         quickCaptureSuccessMessage = "保存しました。入力欄をリセットしました。"
         quickCaptureResetID = UUID()
@@ -1009,6 +1289,15 @@ struct ContentView: View {
         IdeaSampleFactory.makeSamples().forEach(modelContext.insert)
         saveContext()
         didInsertSampleIdeas = true
+    }
+
+    private func refreshDerivedIdeaViews() {
+        resetVisibleIdeaPages()
+        refreshFilteredIdeasCache()
+    }
+
+    private func refreshFilteredIdeasCache() {
+        cachedFilteredIdeas = makeFilteredIdeas()
     }
 
     private func saveContext() {
@@ -1110,6 +1399,10 @@ struct ContentView: View {
         referralCodeInput = ""
         referralCodeMessage = "紹介特典として保存枠を+\(ReferralCode.bonusSlots)件追加しました。"
     }
+
+    private func csvEscaped(_ value: String) -> String {
+        csvEscapedValue(value)
+    }
 }
 
 private struct IdeaGroupSection: Identifiable {
@@ -1126,6 +1419,46 @@ private struct CloudMergeSummary {
 
     var hasChanges: Bool {
         inserted > 0 || updated > 0
+    }
+}
+
+private struct ExportIdeaRecord: Codable {
+    let id: String
+    let title: String
+    let kind: String
+    let kindLabel: String
+    let status: String
+    let statusLabel: String
+    let group: String
+    let tags: [String]
+    let priority: Int
+    let isFavorite: Bool
+    let dueAt: Date?
+    let concept: String
+    let rationale: String
+    let approach: String
+    let nextAction: String
+    let createdAt: Date
+    let updatedAt: Date
+
+    init(idea: Idea, kindOptions: [IdeaKindOption]) {
+        id = idea.id.uuidString
+        title = idea.displayTitle
+        kind = idea.kindRaw
+        kindLabel = IdeaKindCatalog.label(for: idea.kindRaw, options: kindOptions)
+        status = idea.status.rawValue
+        statusLabel = idea.status.label
+        group = idea.displayGroupName
+        tags = idea.tags
+        priority = idea.priority
+        isFavorite = idea.isFavorite
+        dueAt = idea.dueAt
+        concept = idea.concept
+        rationale = idea.rationale
+        approach = idea.approach
+        nextAction = idea.nextAction
+        createdAt = idea.createdAt
+        updatedAt = idea.updatedAt
     }
 }
 
@@ -1288,7 +1621,7 @@ private enum KatachiTab: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "ホーム"
         case .groups: return "グループ"
-        case .save: return "+保存"
+        case .save: return "新規保存"
         case .search: return "検索"
         case .settings: return "設定"
         }
@@ -1471,17 +1804,187 @@ private struct LoadMoreIdeasRow: View {
     }
 }
 
+private struct ExportShareMenu: View {
+    let markdownURLProvider: () -> URL
+    let csvURLProvider: () -> URL
+    let jsonURLProvider: () -> URL
+    let markdownLabel: String
+    let csvLabel: String
+    let jsonLabel: String
+
+    var body: some View {
+        Menu {
+            DeferredExportShareButton(urlProvider: markdownURLProvider) {
+                Label(markdownLabel, systemImage: "doc.text")
+            }
+            DeferredExportShareButton(urlProvider: csvURLProvider) {
+                Label(csvLabel, systemImage: "tablecells")
+            }
+            DeferredExportShareButton(urlProvider: jsonURLProvider) {
+                Label(jsonLabel, systemImage: "curlybraces")
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+        }
+        .accessibilityLabel("共有と書き出し")
+    }
+}
+
+private struct DeferredExportShareButton<LabelContent: View>: View {
+    let urlProvider: () -> URL
+    let label: () -> LabelContent
+    @State private var shareItem: ExportShareItem?
+
+    init(
+        urlProvider: @escaping () -> URL,
+        @ViewBuilder label: @escaping () -> LabelContent
+    ) {
+        self.urlProvider = urlProvider
+        self.label = label
+    }
+
+    var body: some View {
+        Button {
+            shareItem = ExportShareItem(url: urlProvider())
+        } label: {
+            label()
+        }
+        .sheet(item: $shareItem) { item in
+            ExportActivityView(url: item.url)
+        }
+    }
+}
+
+private struct ExportShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+#if canImport(UIKit)
+private struct ExportActivityView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+#else
+private struct ExportActivityView: View {
+    let url: URL
+
+    var body: some View {
+        ShareLink(item: url) {
+            Label("共有", systemImage: "square.and.arrow.up")
+        }
+        .padding()
+    }
+}
+#endif
+
+private struct SmartIdeaShelfRow: View {
+    let title: String
+    let subtitle: String
+    let iconName: String
+    let tint: Color
+    let ideas: [Idea]
+    let kindOptions: [IdeaKindOption]
+    let groupOptions: [IdeaGroupOption]
+    let selectAction: (Idea) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: iconName)
+                    .foregroundStyle(tint)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            ForEach(ideas) { idea in
+                Button {
+                    selectAction(idea)
+                } label: {
+                    CompactIdeaRow(
+                        idea: idea,
+                        kindOptions: kindOptions,
+                        groupOptions: groupOptions
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(tint.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct CompactIdeaRow: View {
+    let idea: Idea
+    let kindOptions: [IdeaKindOption]
+    let groupOptions: [IdeaGroupOption]
+
+    private var group: IdeaGroupOption {
+        groupOption(for: idea.displayGroupName, in: groupOptions)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: group.iconName)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(color(forGroupColorName: group.colorName))
+                .frame(width: 24, height: 24)
+                .background(color(forGroupColorName: group.colorName).opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(idea.displayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(IdeaKindCatalog.label(for: idea.kindRaw, options: kindOptions))
+                    Text(idea.status.label)
+                    if let dueAt = idea.dueAt {
+                        Text(dueAt.formatted(date: .numeric, time: .omitted))
+                    }
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                if !idea.nextAction.trimmed.isEmpty {
+                    Text(idea.nextAction)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 5)
+    }
+}
+
 private struct GroupListRow: View {
-    let name: String
+    let group: IdeaGroupOption
     let count: Int
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "folder.fill")
-                .foregroundStyle(.blue)
+            Image(systemName: group.iconName)
+                .foregroundStyle(color(forGroupColorName: group.colorName))
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
-                Text(name)
+                Text(group.name)
                     .font(.subheadline.weight(.semibold))
                 Text("\(count)件")
                     .font(.caption)
@@ -2036,6 +2539,10 @@ private struct BillingView: View {
                 .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
             }
 
+            Section("プラン比較") {
+                PlanComparisonView(currentPlan: currentPlan)
+            }
+
             Section {
                 ForEach(AppPlan.allCases) { plan in
                     PlanRow(
@@ -2230,6 +2737,63 @@ private struct BillingFeatureRow: View {
             }
         }
         .padding(.vertical, 3)
+    }
+}
+
+private struct PlanComparisonView: View {
+    let currentPlan: AppPlan
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            planHeader
+            comparisonRow("保存枠", free: "50件 + 追加枠", plus: "月300件", pro: "月1,500件")
+            comparisonRow("保存先", free: "端末内", plus: "クラウド", pro: "クラウド")
+            comparisonRow("ログイン", free: "不要", plus: "Google / Apple", pro: "Google / Apple")
+            comparisonRow("価格", free: "無料", plus: "月460円から", pro: "月1,200円から")
+            comparisonRow("向いている人", free: AppPlan.free.audienceLabel, plus: AppPlan.plus.audienceLabel, pro: AppPlan.pro.audienceLabel)
+        }
+    }
+
+    private var planHeader: some View {
+        HStack(spacing: 0) {
+            ForEach(AppPlan.allCases) { plan in
+                HStack(spacing: 4) {
+                    Text(plan.label)
+                    if plan == currentPlan {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                }
+                .font(.caption.weight(.bold))
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private func comparisonRow(_ title: String, free: String, plus: String, pro: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 8) {
+                comparisonValue(free, plan: .free)
+                comparisonValue(plus, plan: .plus)
+                comparisonValue(pro, plan: .pro)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func comparisonValue(_ value: String, plan: AppPlan) -> some View {
+        Text(value)
+            .font(.caption)
+            .foregroundStyle(plan == currentPlan ? .primary : .secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 7)
+            .background(plan == currentPlan ? Color.blue.opacity(0.12) : Color(.tertiarySystemFill))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -2490,6 +3054,8 @@ private enum IdeaCardProminence {
 private struct IdeaCardView: View {
     let idea: Idea
     let kindOptions: [IdeaKindOption]
+    let groupOptions: [IdeaGroupOption]
+    let searchQuery: String
     let prominence: IdeaCardProminence
 
     private var shownTags: [String] {
@@ -2500,10 +3066,18 @@ private struct IdeaCardView: View {
         max(idea.tags.count - shownTags.count, 0)
     }
 
+    private var group: IdeaGroupOption {
+        groupOption(for: idea.displayGroupName, in: groupOptions)
+    }
+
+    private var groupTint: Color {
+        color(forGroupColorName: group.colorName)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
-                Text(idea.displayTitle)
+                HighlightedText(value: idea.displayTitle, query: searchQuery)
                     .font(.headline)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
@@ -2514,10 +3088,9 @@ private struct IdeaCardView: View {
             }
 
             if !idea.concept.isEmpty {
-                Text(idea.concept)
+                MarkdownSnippetText(value: idea.concept, query: searchQuery, lineLimit: 2)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
 
             HStack(spacing: 8) {
@@ -2526,16 +3099,27 @@ private struct IdeaCardView: View {
                     label: IdeaKindCatalog.label(for: idea.kindRaw, options: kindOptions),
                     tint: tintColor(forKindRaw: idea.kindRaw)
                 )
-                IdeaBadge(label: idea.displayGroupName, tint: .blue)
+                Label {
+                    Text(idea.displayGroupName)
+                } icon: {
+                    Image(systemName: group.iconName)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(groupTint)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(groupTint.opacity(0.18))
+                .clipShape(Capsule())
                 if let dueAt = idea.dueAt {
                     IdeaBadge(label: dueAt.formatted(date: .numeric, time: .omitted), tint: dueAt < Date() ? .red : .orange)
                 }
             }
+            .lineLimit(1)
 
             if !shownTags.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(shownTags, id: \.self) { tag in
-                        Text("#\(tag)")
+                        HighlightedText(value: "#\(tag)", query: searchQuery)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
@@ -2553,7 +3137,7 @@ private struct IdeaCardView: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if !idea.nextAction.isEmpty {
-                    Text("次: \(idea.nextAction)")
+                    HighlightedText(value: "次: \(idea.nextAction)", query: searchQuery)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -2567,11 +3151,11 @@ private struct IdeaCardView: View {
         .padding(prominence == .featured ? 14 : 12)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(prominence == .featured ? Color.blue.opacity(0.08) : Color(.secondarySystemBackground))
+                .fill(prominence == .featured ? groupTint.opacity(0.1) : Color(.secondarySystemBackground))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(prominence == .featured ? Color.blue.opacity(0.28) : Color(.separator), lineWidth: 0.5)
+                .stroke(prominence == .featured ? groupTint.opacity(0.3) : groupTint.opacity(0.22), lineWidth: 0.8)
         )
     }
 }
@@ -2588,6 +3172,127 @@ private struct IdeaBadge: View {
             .padding(.vertical, 4)
             .background(tint.opacity(0.18))
             .clipShape(Capsule())
+    }
+}
+
+private struct HighlightedText: View {
+    let value: String
+    let query: String
+
+    var body: some View {
+        Text(attributedValue)
+    }
+
+    private var attributedValue: AttributedString {
+        var attributed = AttributedString(value)
+        let cleanedQuery = query.trimmed
+        guard !cleanedQuery.isEmpty else {
+            return attributed
+        }
+
+        let loweredValue = value.lowercased()
+        let loweredQuery = cleanedQuery.lowercased()
+        var searchStart = loweredValue.startIndex
+
+        while let range = loweredValue.range(of: loweredQuery, range: searchStart..<loweredValue.endIndex) {
+            if let attributedRange = Range(range, in: attributed) {
+                attributed[attributedRange].backgroundColor = .yellow.opacity(0.35)
+                attributed[attributedRange].foregroundColor = .primary
+            }
+            searchStart = range.upperBound
+        }
+
+        return attributed
+    }
+}
+
+private struct MarkdownSnippetText: View {
+    let value: String
+    let query: String
+    var lineLimit: Int? = nil
+
+    @MainActor private var parsedLines: [MarkdownDisplayLine] {
+        let lines = value
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.trimmed.isEmpty }
+        let limited = lineLimit.map { Array(lines.prefix($0)) } ?? lines
+        return limited.map(MarkdownDisplayLine.init)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(parsedLines) { line in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if let iconName = line.iconName {
+                        Image(systemName: iconName)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(line.iconTint)
+                    }
+                    HighlightedText(value: line.text, query: query)
+                        .font(line.font)
+                        .strikethrough(line.isCompleted)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+}
+
+private struct MarkdownDisplayLine: Identifiable {
+    let id: String
+    let text: String
+    let iconName: String?
+    let iconTint: Color
+    let font: Font
+    let isCompleted: Bool
+
+    init(_ rawLine: String) {
+        let line = rawLine.trimmed
+        id = rawLine
+        if line.hasPrefix("- [x] ") || line.hasPrefix("- [X] ") {
+            text = String(line.dropFirst(6)).trimmed
+            iconName = "checkmark.circle.fill"
+            iconTint = .green
+            font = .body
+            isCompleted = true
+        } else if line.hasPrefix("- [ ] ") {
+            text = String(line.dropFirst(6)).trimmed
+            iconName = "circle"
+            iconTint = .secondary
+            font = .body
+            isCompleted = false
+        } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+            text = String(line.dropFirst(2)).trimmed
+            iconName = "circle.fill"
+            iconTint = .secondary
+            font = .body
+            isCompleted = false
+        } else if line.hasPrefix("### ") {
+            text = String(line.dropFirst(4)).trimmed
+            iconName = nil
+            iconTint = .secondary
+            font = .subheadline.weight(.semibold)
+            isCompleted = false
+        } else if line.hasPrefix("## ") {
+            text = String(line.dropFirst(3)).trimmed
+            iconName = nil
+            iconTint = .secondary
+            font = .headline
+            isCompleted = false
+        } else if line.hasPrefix("# ") {
+            text = String(line.dropFirst(2)).trimmed
+            iconName = nil
+            iconTint = .secondary
+            font = .headline
+            isCompleted = false
+        } else {
+            text = line
+            iconName = nil
+            iconTint = .secondary
+            font = .body
+            isCompleted = false
+        }
     }
 }
 
@@ -2648,7 +3353,8 @@ private struct IdeaDetailView: View {
                 }
             }
         }
-        .navigationTitle("アイデア詳細")
+        .navigationTitle("詳細")
+        .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             Button {
                 isPresentingEditor = true
@@ -2667,8 +3373,40 @@ private struct IdeaDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    ShareLink(item: idea.markdownExport) {
+                    DeferredExportShareButton(
+                        urlProvider: {
+                            exportFileURL(
+                                contents: idea.markdownExport,
+                                filename: idea.displayTitle,
+                                fileExtension: "md"
+                            )
+                        }
+                    ) {
                         Label("Markdown詳細", systemImage: "doc.text")
+                    }
+
+                    DeferredExportShareButton(
+                        urlProvider: {
+                            exportFileURL(
+                                contents: ideaCSVExport,
+                                filename: idea.displayTitle,
+                                fileExtension: "csv"
+                            )
+                        }
+                    ) {
+                        Label("CSVで共有", systemImage: "tablecells")
+                    }
+
+                    DeferredExportShareButton(
+                        urlProvider: {
+                            exportFileURL(
+                                contents: ideaJSONExport,
+                                filename: idea.displayTitle,
+                                fileExtension: "json"
+                            )
+                        }
+                    ) {
+                        Label("JSONで共有", systemImage: "curlybraces")
                     }
 
                     ShareLink(item: idea.githubIssueExport) {
@@ -2704,6 +3442,44 @@ private struct IdeaDetailView: View {
             }
         }
     }
+
+    private var ideaCSVExport: String {
+        [
+            "id,title,kind,status,group,priority,favorite,dueAt,tags,concept,rationale,approach,nextAction,createdAt,updatedAt",
+            [
+                idea.id.uuidString,
+                idea.displayTitle,
+                IdeaKindCatalog.label(for: idea.kindRaw, options: kindOptions),
+                idea.status.label,
+                idea.displayGroupName,
+                "\(idea.priority)",
+                idea.isFavorite ? "true" : "false",
+                idea.dueAt?.ISO8601Format() ?? "",
+                idea.tags.joined(separator: " "),
+                idea.concept,
+                idea.rationale,
+                idea.approach,
+                idea.nextAction,
+                idea.createdAt.ISO8601Format(),
+                idea.updatedAt.ISO8601Format()
+            ]
+            .map(csvEscapedValue)
+            .joined(separator: ",")
+        ]
+        .joined(separator: "\n")
+    }
+
+    private var ideaJSONExport: String {
+        let record = ExportIdeaRecord(idea: idea, kindOptions: kindOptions)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(record),
+              let encoded = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return encoded
+    }
 }
 
 private struct LabelValueRow: View {
@@ -2729,8 +3505,12 @@ private struct TextOrPlaceholder: View {
             Text("未入力")
                 .foregroundStyle(.secondary)
         } else {
-            Text(value)
+            MarkdownSnippetText(value: value, query: nilSearchQuery)
         }
+    }
+
+    private var nilSearchQuery: String {
+        ""
     }
 }
 
@@ -2819,13 +3599,18 @@ private struct IdeaFilterView: View {
 
 private struct LibrarySettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query private var ideas: [Idea]
+
     @Binding var kindOptionsData: String
     @Binding var groupOptionsData: String
 
     @State private var newKindLabel = ""
-    @State private var newGroupName = ""
-    @State private var newGroupIconName = "folder"
-    @State private var newGroupColorName = "blue"
+    @State private var editingGroupID: String?
+    @State private var groupDraftName = ""
+    @State private var groupDraftIconName = "folder"
+    @State private var groupDraftColorName = "blue"
+    @State private var isPresentingGroupEditor = false
 
     private var kindOptions: [IdeaKindOption] {
         IdeaKindCatalog.options(from: kindOptionsData)
@@ -2835,37 +3620,44 @@ private struct LibrarySettingsView: View {
         IdeaGroupCatalog.options(from: groupOptionsData)
     }
 
+    private var groupEditorTitle: String {
+        editingGroupID == nil ? "グループを追加" : "グループを編集"
+    }
+
     var body: some View {
         Form {
             Section("グループ") {
                 ForEach(groupOptions) { group in
-                    HStack(spacing: 10) {
-                        Image(systemName: group.iconName)
-                            .foregroundStyle(color(forGroupColorName: group.colorName))
-                            .frame(width: 24)
-                        Text(group.name)
-                        Spacer()
-                        Text(group.colorName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Button {
+                        beginEditingGroup(group)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: group.iconName)
+                                .foregroundStyle(color(forGroupColorName: group.colorName))
+                                .frame(width: 24)
+                            Text(group.name)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
                 .onDelete(perform: deleteGroups)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("新しいグループ", text: $newGroupName)
-                    Picker("アイコン", selection: $newGroupIconName) {
-                        ForEach(GroupAppearance.iconOptions, id: \.self) { iconName in
-                            Label(iconName, systemImage: iconName).tag(iconName)
-                        }
+                HStack {
+                    Spacer()
+                    Button(action: beginAddingGroup) {
+                        Image(systemName: "plus")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.blue)
+                            .clipShape(Circle())
                     }
-                    Picker("色", selection: $newGroupColorName) {
-                        ForEach(GroupAppearance.colorOptions, id: \.self) { colorName in
-                            Text(colorName).tag(colorName)
-                        }
-                    }
-                    Button("追加", action: addGroup)
-                        .disabled(newGroupName.trimmed.isEmpty)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("グループを追加")
                 }
             }
 
@@ -2898,23 +3690,93 @@ private struct LibrarySettingsView: View {
                 }
             }
         }
+        .sheet(isPresented: $isPresentingGroupEditor) {
+            NavigationStack {
+                Form {
+                    Section("名前") {
+                        TextField("グループ名", text: $groupDraftName)
+                    }
+
+                    Section("アイコン") {
+                        Picker("アイコン", selection: $groupDraftIconName) {
+                            ForEach(GroupAppearance.iconOptions, id: \.self) { iconName in
+                                Label(iconName, systemImage: iconName).tag(iconName)
+                            }
+                        }
+                    }
+
+                    Section("色") {
+                        Picker("色", selection: $groupDraftColorName) {
+                            ForEach(GroupAppearance.colorOptions, id: \.self) { colorName in
+                                Label(colorName, systemImage: "circle.fill")
+                                    .foregroundStyle(color(forGroupColorName: colorName))
+                                    .tag(colorName)
+                            }
+                        }
+                    }
+                }
+                .navigationTitle(groupEditorTitle)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("キャンセル") {
+                            isPresentingGroupEditor = false
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("保存", action: saveGroupDraft)
+                            .disabled(groupDraftName.trimmed.isEmpty)
+                    }
+                }
+            }
+        }
     }
 
-    private func addGroup() {
-        let name = newGroupName.trimmed
+    private func beginAddingGroup() {
+        editingGroupID = nil
+        groupDraftName = ""
+        groupDraftIconName = "folder"
+        groupDraftColorName = "blue"
+        isPresentingGroupEditor = true
+    }
+
+    private func beginEditingGroup(_ group: IdeaGroupOption) {
+        editingGroupID = group.id
+        groupDraftName = group.name
+        groupDraftIconName = group.iconName
+        groupDraftColorName = group.colorName
+        isPresentingGroupEditor = true
+    }
+
+    private func saveGroupDraft() {
+        let name = groupDraftName.trimmed
         guard !name.isEmpty else {
             return
         }
         var options = groupOptions
-        guard !options.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
-            newGroupName = ""
+        guard !options.contains(where: { $0.id != editingGroupID && $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
             return
         }
-        options.append(IdeaGroupOption(id: "group.\(UUID().uuidString)", name: name, iconName: newGroupIconName, colorName: newGroupColorName))
+
+        if let editingGroupID,
+           let index = options.firstIndex(where: { $0.id == editingGroupID }) {
+            let oldName = options[index].name
+            options[index].name = name
+            options[index].iconName = groupDraftIconName
+            options[index].colorName = groupDraftColorName
+            updateIdeas(fromGroupName: oldName, toGroupName: name)
+        } else {
+            options.append(
+                IdeaGroupOption(
+                    id: "group.\(UUID().uuidString)",
+                    name: name,
+                    iconName: groupDraftIconName,
+                    colorName: groupDraftColorName
+                )
+            )
+        }
+
         groupOptionsData = IdeaGroupCatalog.encode(options)
-        newGroupName = ""
-        newGroupIconName = "folder"
-        newGroupColorName = "blue"
+        isPresentingGroupEditor = false
     }
 
     private func deleteGroups(at offsets: IndexSet) {
@@ -2924,6 +3786,20 @@ private struct LibrarySettingsView: View {
             options = [IdeaGroupOption(id: "group.inbox", name: IdeaGroupCatalog.defaultName, iconName: "tray", colorName: "blue")]
         }
         groupOptionsData = IdeaGroupCatalog.encode(options)
+    }
+
+    private func updateIdeas(fromGroupName oldName: String, toGroupName newName: String) {
+        guard oldName != newName else {
+            return
+        }
+
+        let oldStoredName = IdeaGroupCatalog.storedName(from: oldName)
+        let newStoredName = IdeaGroupCatalog.storedName(from: newName)
+        for idea in ideas where idea.projectName == oldStoredName || idea.displayGroupName == oldName {
+            idea.projectName = newStoredName
+            idea.touch()
+        }
+        try? modelContext.save()
     }
 
     private func addKind() {
@@ -3290,6 +4166,50 @@ private func color(forGroupColorName name: String) -> Color {
     case "gray": return .gray
     default: return .blue
     }
+}
+
+private func groupOption(for name: String, in options: [IdeaGroupOption]) -> IdeaGroupOption {
+    if let option = options.first(where: { $0.name == name }) {
+        return option
+    }
+    return IdeaGroupOption(id: "group.fallback.\(name)", name: name, iconName: "folder", colorName: "gray")
+}
+
+private func csvEscapedValue(_ value: String) -> String {
+    let normalized = value.replacingOccurrences(of: "\r\n", with: "\n")
+    if normalized.contains(",") || normalized.contains("\"") || normalized.contains("\n") {
+        return "\"\(normalized.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+    return normalized
+}
+
+private func exportFileURL(contents: String, filename: String, fileExtension: String) -> URL {
+    let safeName = sanitizedExportFilename(filename)
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("KatachiExports", isDirectory: true)
+
+    try? FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+
+    let fileURL = directory.appendingPathComponent("\(safeName).\(fileExtension)")
+    try? contents.write(to: fileURL, atomically: true, encoding: .utf8)
+    return fileURL
+}
+
+private func sanitizedExportFilename(_ rawValue: String) -> String {
+    let fallback = "Katachiカード"
+    let trimmed = rawValue.trimmed.isEmpty ? fallback : rawValue.trimmed
+    let invalidCharacters = CharacterSet(charactersIn: "/\\?%*|\"<>:")
+        .union(.newlines)
+        .union(.controlCharacters)
+    let cleaned = trimmed
+        .components(separatedBy: invalidCharacters)
+        .joined(separator: " ")
+        .replacingOccurrences(of: "  ", with: " ")
+        .trimmed
+    return String((cleaned.isEmpty ? fallback : cleaned).prefix(80))
 }
 
 private func tintColor(forKindRaw rawValue: String) -> Color {
