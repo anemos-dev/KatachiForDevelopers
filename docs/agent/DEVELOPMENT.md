@@ -7,6 +7,7 @@
 - iOS 17以上、Swift 5、SwiftUI / SwiftData / StoreKit / Firebase Auth・Firestore / Google Sign-In。
 - `開発者用メモアプリ/__________App.swift`がSwiftDataとGoogle Sign-Inを構成し、`ContentView.swift`が画面遷移・共有状態・操作処理を担当します。
 - `Views/Tabs/`にホーム・グループ・保存・検索（検索結果を含む）・設定のViewを配置し、必要な値・Binding・操作クロージャを渡します。
+- `IdeaSaveService.swift`にクイック保存・詳細作成・詳細編集で共通の入力反映とSwiftData保存処理があります。作成制限の確認と成功・失敗の画面表示は呼び出し元が担当します。
 - `Item.swift`にカード、分類、プラン、作成制限、テンプレート、SwiftDataの`Idea`があります。
 - `Monetization.swift`が商品・購入・プロモーション、`CloudSync.swift`がFirebase初期化、認証、同期状態を担当します。
 - `docs/`は仕様・法務・審査・Webサポート、`firebase/`はルール、`assets/`と`release-assets/`は素材です。
