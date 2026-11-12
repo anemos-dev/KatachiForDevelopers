@@ -181,416 +181,119 @@ struct ContentView: View {
     private var selectedTabContent: some View {
         switch selectedTab {
         case .home:
-            homeContent
-        case .groups:
-            groupsContent
-        case .save:
-            saveContent
-        case .search:
-            searchContent
-        case .settings:
-            settingsContent
-        }
-    }
-
-    @ViewBuilder
-    private var homeContent: some View {
-        if ideas.isEmpty {
-            EmptyStateView(
-                title: "Katachiにまだカードがありません",
-                systemImage: "lightbulb",
-                message: "思いついたことを、まず1枚だけ保存してみましょう。",
-                actionTitle: "保存する",
-                action: {
-                    selectedTab = .save
-                }
+            HomeTabView(
+                ideas: ideas,
+                currentPlan: currentPlan,
+                creationAllowance: creationAllowance,
+                extraLocalSlots: extraLocalSlots,
+                shouldShowUpgradeNudge: shouldShowUpgradeNudge,
+                upgradeNudgeTitle: upgradeNudgeTitle,
+                upgradeNudgeMessage: upgradeNudgeMessage,
+                nextActionIdeas: nextActionIdeas,
+                dueSoonIdeas: dueSoonIdeas,
+                uncategorizedIdeas: uncategorizedIdeas,
+                kindOptions: kindOptions,
+                groupOptions: groupOptions,
+                pagedHomeIdeas: pagedHomeIdeas,
+                hasMoreHomeIdeas: hasMoreHomeIdeas,
+                remainingHomeIdeasCount: remainingHomeIdeasCount,
+                createAction: { selectedTab = .save },
+                planAction: { isPresentingBillingSheet = true },
+                selectIdea: { selectedIdea = $0 },
+                loadMoreHomeIdeas: loadMoreHomeIdeas,
+                cloudSyncRow: { cloudSyncRow },
+                ideaRow: { ideaNavigationLink(for: $0) }
             )
-        } else {
-            List {
-                StorageStatusRow(
-                    plan: currentPlan,
-                    allowance: creationAllowance,
-                    extraLocalSlots: extraLocalSlots
-                )
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
-
-                if shouldShowUpgradeNudge {
-                    UpgradeNudgeRow(
-                        title: upgradeNudgeTitle,
-                        message: upgradeNudgeMessage,
-                        action: {
-                            isPresentingBillingSheet = true
-                        }
-                    )
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
-
-                if currentPlan.usesCloudStorage {
-                    cloudSyncRow
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                }
-
-                if !nextActionIdeas.isEmpty || !dueSoonIdeas.isEmpty || !uncategorizedIdeas.isEmpty {
-                    Section("今見るカード") {
-                        if !nextActionIdeas.isEmpty {
-                            SmartIdeaShelfRow(
-                                title: "次にやること",
-                                subtitle: "\(nextActionIdeas.count)件のアクションがあります",
-                                iconName: "checklist",
-                                tint: .green,
-                                ideas: Array(nextActionIdeas.prefix(3)),
-                                kindOptions: kindOptions,
-                                groupOptions: groupOptions,
-                                selectAction: { selectedIdea = $0 }
-                            )
-                            .listRowSeparator(.hidden)
-                        }
-
-                        if !dueSoonIdeas.isEmpty {
-                            SmartIdeaShelfRow(
-                                title: "期限が近い",
-                                subtitle: "\(dueSoonIdeas.count)件を確認できます",
-                                iconName: "calendar",
-                                tint: .orange,
-                                ideas: Array(dueSoonIdeas.prefix(3)),
-                                kindOptions: kindOptions,
-                                groupOptions: groupOptions,
-                                selectAction: { selectedIdea = $0 }
-                            )
-                            .listRowSeparator(.hidden)
-                        }
-
-                        if !uncategorizedIdeas.isEmpty {
-                            SmartIdeaShelfRow(
-                                title: "未分類",
-                                subtitle: "Inboxに\(uncategorizedIdeas.count)件あります",
-                                iconName: "tray",
-                                tint: .blue,
-                                ideas: Array(uncategorizedIdeas.prefix(3)),
-                                kindOptions: kindOptions,
-                                groupOptions: groupOptions,
-                                selectAction: { selectedIdea = $0 }
-                            )
-                            .listRowSeparator(.hidden)
-                        }
-                    }
-                }
-
-                Section("最近のカード") {
-                    ForEach(pagedHomeIdeas) { idea in
-                        ideaNavigationLink(for: idea)
-                    }
-                }
-
-                if hasMoreHomeIdeas {
-                    LoadMoreIdeasRow(
-                        remainingCount: remainingHomeIdeasCount,
-                        action: loadMoreHomeIdeas
-                    )
-                    .listRowSeparator(.hidden)
-                }
-            }
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Color(.systemGroupedBackground))
+        case .groups:
+            GroupsTabView(
+                groupOptions: groupOptions,
+                countIdeas: { countIdeas(in: $0) },
+                ideaKindOptionsData: $ideaKindOptionsData,
+                ideaGroupOptionsData: $ideaGroupOptionsData,
+                groupDestination: { groupDetailContent(for: $0) }
+            )
+        case .save:
+            SaveTabView(
+                text: $quickCaptureText,
+                kindRaw: $quickCaptureKindRaw,
+                groupName: $quickCaptureGroupName,
+                resetID: quickCaptureResetID,
+                canSave: canSaveQuickCapture,
+                statusText: creationAllowance.saveScreenSummary,
+                successMessage: quickCaptureSuccessMessage,
+                showsUpgradeNudge: shouldShowUpgradeNudge,
+                upgradeTitle: upgradeNudgeTitle,
+                upgradeMessage: upgradeNudgeMessage,
+                kindOptions: kindOptions,
+                groupNames: quickCaptureGroupNames,
+                saveAction: saveQuickCapture,
+                detailAction: presentCreateFlow,
+                planAction: { isPresentingBillingSheet = true }
+            )
+        case .search:
+            SearchTabView(
+                recentSearchQueries: recentSearchQueries,
+                groupOptions: groupOptions,
+                kindOptions: kindOptions,
+                searchText: $searchText,
+                selectedKindRaw: $selectedKindRaw,
+                selectedGroupName: $selectedGroupName,
+                selectedStatus: $selectedStatus,
+                favoritesOnly: $favoritesOnly,
+                sortOption: $sortOption,
+                hasActiveFilters: hasActiveFilters,
+                showSearchResults: showSearchResults,
+                recordSearchQuery: recordSearchQuery,
+                resetSearchFilters: resetSearchFilters,
+                clearSearchHistory: { recentSearchQueriesData = "" }
+            )
+        case .settings:
+            SettingsTabView(
+                currentPlan: currentPlan,
+                creationAllowance: creationAllowance,
+                extraLocalSlots: extraLocalSlots,
+                ideaKindOptionsData: $ideaKindOptionsData,
+                ideaGroupOptionsData: $ideaGroupOptionsData,
+                promotionCodeInput: $promotionCodeInput,
+                promotionCodeMessage: promotionCodeMessage,
+                promotionCodeMessageColor: promotionCodeMessageColor,
+                referralCodeInput: $referralCodeInput,
+                referralCodeMessage: referralCodeMessage,
+                redeemPromotionCode: redeemPromotionCode,
+                applyReferralCode: applyReferralCode,
+                planAction: { isPresentingBillingSheet = true },
+                legalAction: { isPresentingLegalSheet = true },
+                mdExportURL: {
+                    exportFileURL(contents: makeMarkdownExport(for: ideas), filename: "Katachi全カード", fileExtension: "md")
+                },
+                csvExportURL: {
+                    exportFileURL(contents: makeCSVExport(for: ideas), filename: "Katachi全カード", fileExtension: "csv")
+                },
+                jsonExportURL: {
+                    exportFileURL(contents: makeJSONExport(for: ideas), filename: "Katachi全カード", fileExtension: "json")
+                },
+                cloudSyncRow: { cloudSyncRow }
+            )
         }
-    }
-
-    private var groupsContent: some View {
-        List {
-            Section {
-                ForEach(groupOptions) { group in
-                    NavigationLink {
-                        groupDetailContent(for: group.name)
-                    } label: {
-                        GroupListRow(
-                            group: group,
-                            count: countIdeas(in: group.name)
-                        )
-                    }
-                }
-            } header: {
-                Text("グループ")
-            } footer: {
-                Text("グループを選ぶと、その中のカードだけを確認できます。")
-            }
-
-            Section {
-                NavigationLink {
-                    LibrarySettingsView(
-                        kindOptionsData: $ideaKindOptionsData,
-                        groupOptionsData: $ideaGroupOptionsData
-                    )
-                } label: {
-                    Label("グループと種類を管理", systemImage: "slider.horizontal.3")
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemGroupedBackground))
-    }
-
-    private var saveContent: some View {
-        QuickSaveView(
-            text: $quickCaptureText,
-            kindRaw: $quickCaptureKindRaw,
-            groupName: $quickCaptureGroupName,
-            resetID: quickCaptureResetID,
-            canSave: canSaveQuickCapture,
-            statusText: creationAllowance.saveScreenSummary,
-            successMessage: quickCaptureSuccessMessage,
-            showsUpgradeNudge: shouldShowUpgradeNudge,
-            upgradeTitle: upgradeNudgeTitle,
-            upgradeMessage: upgradeNudgeMessage,
-            kindOptions: kindOptions,
-            groupNames: quickCaptureGroupNames,
-            saveAction: saveQuickCapture,
-            detailAction: presentCreateFlow,
-            planAction: { isPresentingBillingSheet = true }
-        )
-    }
-
-    private var searchContent: some View {
-        List {
-            Section {
-                HStack(spacing: 10) {
-                    TextField("タイトル・内容・タグで検索", text: $searchText)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.search)
-                        .onSubmit(showSearchResults)
-
-                    Button(action: showSearchResults) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.headline)
-                            .frame(width: 38, height: 38)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityLabel("検索")
-                }
-
-                if !recentSearchQueries.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(recentSearchQueries, id: \.self) { query in
-                                Button(query) {
-                                    searchText = query
-                                    recordSearchQuery(query)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-            }
-
-            Section("絞り込み") {
-                Picker("グループ", selection: groupSelection) {
-                    Text("すべて").tag("all")
-                    ForEach(groupOptions) { group in
-                        Text(group.name).tag(group.name)
-                    }
-                }
-
-                Picker("種類", selection: kindSelection) {
-                    Text("すべて").tag("all")
-                    ForEach(kindOptions) { kind in
-                        Text(kind.label).tag(kind.id)
-                    }
-                }
-
-                Picker("ステータス", selection: statusSelection) {
-                    Text("すべて").tag("all")
-                    ForEach(IdeaStatus.allCases) { status in
-                        Text(status.label).tag(status.rawValue)
-                    }
-                }
-
-                Toggle("お気に入りのみ", isOn: $favoritesOnly)
-
-                Picker("並び替え", selection: $sortOption) {
-                    ForEach(IdeaSortOption.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-
-                Button("条件をリセット") {
-                    resetSearchFilters()
-                }
-                .disabled(!hasActiveFilters && searchText.trimmed.isEmpty)
-
-                Button("検索履歴を消去") {
-                    recentSearchQueriesData = ""
-                }
-                .disabled(recentSearchQueries.isEmpty)
-            }
-
-            if hasActiveFilters {
-                ActiveFiltersRow(
-                    selectedKindRaw: selectedKindRaw,
-                    selectedGroupName: selectedGroupName,
-                    selectedStatus: selectedStatus,
-                    favoritesOnly: favoritesOnly,
-                    kindOptions: kindOptions
-                )
-            }
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemGroupedBackground))
     }
 
     private var searchResultsContent: some View {
-        List {
-            if hasActiveFilters {
-                ActiveFiltersRow(
-                    selectedKindRaw: selectedKindRaw,
-                    selectedGroupName: selectedGroupName,
-                    selectedStatus: selectedStatus,
-                    favoritesOnly: favoritesOnly,
-                    kindOptions: kindOptions
-                )
-            }
-
-            if filteredIdeas.isEmpty {
-                EmptyResultsRow(
-                    actionTitle: hasActiveFilters || !searchText.trimmed.isEmpty ? "条件をリセット" : nil,
-                    action: {
-                        resetSearchFilters()
-                    }
-                )
-            } else {
-                Section("検索結果 \(filteredIdeas.count)件") {
-                    ForEach(pagedFilteredIdeas) { idea in
-                        ideaNavigationLink(for: idea)
-                    }
-
-                    if hasMoreSearchIdeas {
-                        LoadMoreIdeasRow(
-                            remainingCount: remainingSearchIdeasCount,
-                            action: loadMoreSearchIdeas
-                        )
-                    }
-                }
-            }
-        }
-        .navigationTitle("検索結果")
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemGroupedBackground))
-    }
-
-    private var settingsContent: some View {
-        List {
-            Section("アカウント") {
-                cloudSyncRow
-            }
-
-            Section {
-                PlanSummaryCard(
-                    plan: currentPlan,
-                    allowance: creationAllowance,
-                    extraLocalSlots: extraLocalSlots,
-                    action: {
-                        isPresentingBillingSheet = true
-                    }
-                )
-
-                Button {
-                    isPresentingBillingSheet = true
-                } label: {
-                    Label("プランを管理", systemImage: currentPlan == .free ? "person.crop.circle.badge.plus" : "cloud.fill")
-                }
-            } header: {
-                Text("プラン")
-            } footer: {
-                Text("保存枠が少なくなったら、Freeの追加枠またはPlus / Proを選べます。クラウド保存はPlus / Proで使えます。")
-            }
-
-            Section("ライブラリ") {
-                NavigationLink {
-                    LibrarySettingsView(
-                        kindOptionsData: $ideaKindOptionsData,
-                        groupOptionsData: $ideaGroupOptionsData
-                    )
-                } label: {
-                    Label("種類・グループの管理", systemImage: "slider.horizontal.3")
-                }
-            }
-
-            Section {
-                DeferredExportShareButton(
-                    urlProvider: {
-                        exportFileURL(
-                            contents: makeMarkdownExport(for: ideas),
-                            filename: "Katachi全カード",
-                            fileExtension: "md"
-                        )
-                    }
-                ) {
-                    Label("Markdownで書き出す", systemImage: "doc.text")
-                }
-                DeferredExportShareButton(
-                    urlProvider: {
-                        exportFileURL(
-                            contents: makeCSVExport(for: ideas),
-                            filename: "Katachi全カード",
-                            fileExtension: "csv"
-                        )
-                    }
-                ) {
-                    Label("CSVで書き出す", systemImage: "tablecells")
-                }
-                DeferredExportShareButton(
-                    urlProvider: {
-                        exportFileURL(
-                            contents: makeJSONExport(for: ideas),
-                            filename: "Katachi全カード",
-                            fileExtension: "json"
-                        )
-                    }
-                ) {
-                    Label("JSONで書き出す", systemImage: "curlybraces")
-                }
-            } header: {
-                Text("バックアップ")
-            } footer: {
-                Text("端末内のカードをまとめて共有・保存できます。重要な内容は定期的に外部へ退避してください。")
-            }
-
-            Section {
-                PromotionCodeRedeemView(
-                    code: $promotionCodeInput,
-                    message: promotionCodeMessage,
-                    messageColor: promotionCodeMessageColor,
-                    redeemAction: redeemPromotionCode,
-                    referralCode: $referralCodeInput,
-                    referralMessage: referralCodeMessage,
-                    referralAction: applyReferralCode
-                )
-            } header: {
-                Text("特典コード")
-            } footer: {
-                Text("特典コードを引き換えると、プランの有効化や保存枠の追加ができます。App Storeの購入履歴とは別管理です。")
-            }
-
-            Section("情報") {
-                Button {
-                    isPresentingLegalSheet = true
-                } label: {
-                    Label("法務・プライバシー", systemImage: "doc.text.magnifyingglass")
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemGroupedBackground))
+        SearchResultsView(
+            hasActiveFilters: hasActiveFilters,
+            selectedKindRaw: selectedKindRaw,
+            selectedGroupName: selectedGroupName,
+            selectedStatus: selectedStatus,
+            favoritesOnly: favoritesOnly,
+            kindOptions: kindOptions,
+            searchText: searchText,
+            filteredIdeas: filteredIdeas,
+            pagedFilteredIdeas: pagedFilteredIdeas,
+            hasMoreSearchIdeas: hasMoreSearchIdeas,
+            remainingSearchIdeasCount: remainingSearchIdeasCount,
+            resetSearchFilters: resetSearchFilters,
+            loadMoreSearchIdeas: loadMoreSearchIdeas,
+            ideaRow: { ideaNavigationLink(for: $0) }
+        )
     }
 
     private var currentPlan: AppPlan {
@@ -640,20 +343,6 @@ struct ContentView: View {
         return names
     }
 
-    private var kindSelection: Binding<String> {
-        Binding(
-            get: { selectedKindRaw ?? "all" },
-            set: { selectedKindRaw = $0 == "all" ? nil : $0 }
-        )
-    }
-
-    private var groupSelection: Binding<String> {
-        Binding(
-            get: { selectedGroupName ?? "all" },
-            set: { selectedGroupName = $0 == "all" ? nil : $0 }
-        )
-    }
-
     private var deletionConfirmationBinding: Binding<Bool> {
         Binding(
             get: { deletionCandidate != nil },
@@ -662,13 +351,6 @@ struct ContentView: View {
                     deletionCandidate = nil
                 }
             }
-        )
-    }
-
-    private var statusSelection: Binding<String> {
-        Binding(
-            get: { selectedStatus?.rawValue ?? "all" },
-            set: { selectedStatus = IdeaStatus(rawValue: $0) }
         )
     }
 
@@ -1704,7 +1386,7 @@ private struct KatachiTabBar: View {
     }
 }
 
-private struct EmptyStateView: View {
+struct EmptyStateView: View {
     let title: String
     let systemImage: String
     let message: String
@@ -1750,7 +1432,7 @@ private struct EmptyStateView: View {
     }
 }
 
-private struct EmptyResultsRow: View {
+struct EmptyResultsRow: View {
     let actionTitle: String?
     let action: (() -> Void)?
 
@@ -1781,7 +1463,7 @@ private struct EmptyResultsRow: View {
     }
 }
 
-private struct LoadMoreIdeasRow: View {
+struct LoadMoreIdeasRow: View {
     let remainingCount: Int
     let action: () -> Void
 
@@ -1830,7 +1512,7 @@ private struct ExportShareMenu: View {
     }
 }
 
-private struct DeferredExportShareButton<LabelContent: View>: View {
+struct DeferredExportShareButton<LabelContent: View>: View {
     let urlProvider: () -> URL
     let label: () -> LabelContent
     @State private var shareItem: ExportShareItem?
@@ -1883,7 +1565,7 @@ private struct ExportActivityView: View {
 }
 #endif
 
-private struct SmartIdeaShelfRow: View {
+struct SmartIdeaShelfRow: View {
     let title: String
     let subtitle: String
     let iconName: String
@@ -1974,7 +1656,7 @@ private struct CompactIdeaRow: View {
     }
 }
 
-private struct GroupListRow: View {
+struct GroupListRow: View {
     let group: IdeaGroupOption
     let count: Int
 
@@ -1996,124 +1678,6 @@ private struct GroupListRow: View {
     }
 }
 
-private struct QuickSaveView: View {
-    @Binding var text: String
-    @Binding var kindRaw: String
-    @Binding var groupName: String
-
-    let resetID: UUID
-    let canSave: Bool
-    let statusText: String
-    let successMessage: String?
-    let showsUpgradeNudge: Bool
-    let upgradeTitle: String
-    let upgradeMessage: String
-    let kindOptions: [IdeaKindOption]
-    let groupNames: [String]
-    let saveAction: () -> Void
-    let detailAction: () -> Void
-    let planAction: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Label(statusText, systemImage: canSave ? "tray.full" : "exclamationmark.triangle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(canSave ? Color.secondary : Color.orange)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                if showsUpgradeNudge {
-                    UpgradeNudgeRow(
-                        title: upgradeTitle,
-                        message: upgradeMessage,
-                        action: planAction
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("入力欄")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                    TextField("作りたい機能、直したい違和感、あとで試したいこと", text: $text, axis: .vertical)
-                        .id(resetID)
-                        .font(.body)
-                        .lineLimit(5...10)
-                        .padding(12)
-                        .background(Color(.systemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.blue.opacity(0.35), lineWidth: 1.5)
-                        )
-                }
-                .padding(14)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("種類")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                        Picker("種類", selection: $kindRaw) {
-                            ForEach(kindOptions) { kind in
-                                Text(kind.label).tag(kind.id)
-                            }
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("グループ")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                        Picker("グループ", selection: $groupName) {
-                            ForEach(groupNames, id: \.self) { name in
-                                Text(name).tag(name)
-                            }
-                        }
-                    }
-                }
-                .padding(14)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                Button(action: saveAction) {
-                    Label("保存", systemImage: "tray.and.arrow.down.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canSave)
-
-                Button(action: detailAction) {
-                    Label("詳細入力で作成", systemImage: "square.and.pencil")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Button(action: planAction) {
-                    Label("プランと保存枠を確認", systemImage: "person.crop.circle.badge.plus")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderless)
-
-                if let successMessage {
-                    Label(successMessage, systemImage: "checkmark.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.green)
-                        .padding(.top, 2)
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(Color(.systemGroupedBackground))
-    }
-}
 
 private struct QuickCaptureBar: View {
     @Binding var text: String
@@ -2150,7 +1714,7 @@ private struct QuickCaptureBar: View {
     }
 }
 
-private struct StorageStatusRow: View {
+struct StorageStatusRow: View {
     let plan: AppPlan
     let allowance: IdeaCreationAllowance
     let extraLocalSlots: Int
@@ -2212,7 +1776,7 @@ private struct StorageStatusRow: View {
     }
 }
 
-private struct UpgradeNudgeRow: View {
+struct UpgradeNudgeRow: View {
     let title: String
     let message: String
     let action: () -> Void
@@ -2246,7 +1810,7 @@ private struct UpgradeNudgeRow: View {
     }
 }
 
-private struct PlanSummaryCard: View {
+struct PlanSummaryCard: View {
     let plan: AppPlan
     let allowance: IdeaCreationAllowance
     let extraLocalSlots: Int
@@ -2461,7 +2025,7 @@ private struct CloudSyncStatusRow: View {
     }
 }
 
-private struct PromotionCodeRedeemView: View {
+struct PromotionCodeRedeemView: View {
     @Binding var code: String
     let message: String?
     let messageColor: Color
@@ -3015,7 +2579,7 @@ private struct PlanRow: View {
     }
 }
 
-private struct ActiveFiltersRow: View {
+struct ActiveFiltersRow: View {
     let selectedKindRaw: String?
     let selectedGroupName: String?
     let selectedStatus: IdeaStatus?
@@ -3597,7 +3161,7 @@ private struct IdeaFilterView: View {
     }
 }
 
-private struct LibrarySettingsView: View {
+struct LibrarySettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query private var ideas: [Idea]
