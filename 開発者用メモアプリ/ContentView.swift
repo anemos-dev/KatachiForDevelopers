@@ -41,6 +41,7 @@ struct ContentView: View {
     @State private var isShowingSearchResults = false
     @State private var quickCaptureText = ""
     @State private var quickCaptureSuccessMessage: String?
+    @State private var quickCaptureSaveErrorMessage: String?
     @State private var quickCaptureResetID = UUID()
     @State private var promotionCodeInput = ""
     @State private var promotionCodeMessage: String?
@@ -148,6 +149,13 @@ struct ContentView: View {
                         Button("キャンセル", role: .cancel) {}
                     } message: {
                         Text("クラウド同期中の場合、Firebase上の同じカードも削除されます。")
+                    }
+                    .alert("保存できませんでした", isPresented: quickCaptureSaveErrorIsPresented) {
+                        Button("OK", role: .cancel) {
+                            quickCaptureSaveErrorMessage = nil
+                        }
+                    } message: {
+                        Text(quickCaptureSaveErrorMessage ?? "不明なエラー")
                     }
                     .navigationDestination(item: $selectedIdea) { idea in
                         IdeaDetailView(
@@ -943,25 +951,30 @@ struct ContentView: View {
             return
         }
 
-        let title = cleanText
-            .split(whereSeparator: \.isNewline)
-            .first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Untitled Idea"
+        do {
+            try IdeaSaveService.save(
+                IdeaSaveValues(
+                    kindRaw: quickCaptureKindRaw,
+                    concept: cleanText,
+                    projectName: quickCaptureGroupName
+                ),
+                in: modelContext
+            )
+            refreshDerivedIdeaViews()
+            quickCaptureText = ""
+            quickCaptureSuccessMessage = "保存しました。入力欄をリセットしました。"
+            quickCaptureResetID = UUID()
+        } catch {
+            quickCaptureSuccessMessage = nil
+            quickCaptureSaveErrorMessage = error.localizedDescription
+        }
+    }
 
-        let groupName = quickCaptureGroupName.trimmed.isEmpty ? IdeaGroupCatalog.defaultName : quickCaptureGroupName
-        let idea = Idea(
-            title: title,
-            concept: cleanText,
-            projectName: IdeaGroupCatalog.storedName(from: groupName)
+    private var quickCaptureSaveErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { quickCaptureSaveErrorMessage != nil },
+            set: { if !$0 { quickCaptureSaveErrorMessage = nil } }
         )
-        idea.kindValue = quickCaptureKindRaw
-        modelContext.insert(idea)
-        saveContext()
-        refreshDerivedIdeaViews()
-        quickCaptureText = ""
-        quickCaptureSuccessMessage = "保存しました。入力欄をリセットしました。"
-        quickCaptureResetID = UUID()
     }
 
     private func insertSampleIdeasIfNeeded() {
@@ -3598,64 +3611,25 @@ private struct IdeaEditorView: View {
     }
 
     private func saveIdea() {
-        let resolvedTitle: String = {
-            if !title.trimmed.isEmpty {
-                return title.trimmed
-            }
-            if let firstLine = concept
-                .split(whereSeparator: \.isNewline)
-                .first?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !firstLine.isEmpty {
-                return firstLine
-            }
-            return "Untitled Idea"
-        }()
-
-        let cleanConcept = concept.trimmed
-        let cleanRationale = rationale.trimmed
-        let cleanApproach = approach.trimmed
-        let cleanNextAction = nextAction.trimmed
-        let cleanProjectName = IdeaGroupCatalog.storedName(from: projectName)
-        let cleanTags = Idea.normalizeTags(from: tagsText)
-        let cleanPriority = Idea.normalizePriority(priority)
-        let cleanDueAt = hasDueDate ? dueAt : nil
-
-        if let editingIdea {
-            editingIdea.title = resolvedTitle
-            editingIdea.kindValue = kindRaw
-            editingIdea.status = status
-            editingIdea.concept = cleanConcept
-            editingIdea.rationale = cleanRationale
-            editingIdea.approach = cleanApproach
-            editingIdea.nextAction = cleanNextAction
-            editingIdea.projectName = cleanProjectName
-            editingIdea.tags = cleanTags
-            editingIdea.priority = cleanPriority
-            editingIdea.isFavorite = isFavorite
-            editingIdea.dueAt = cleanDueAt
-            editingIdea.touch()
-        } else {
-            let newIdea = Idea(
-                title: resolvedTitle,
-                kind: IdeaKind(rawValue: kindRaw) ?? .feature,
-                status: status,
-                concept: cleanConcept,
-                rationale: cleanRationale,
-                approach: cleanApproach,
-                nextAction: cleanNextAction,
-                projectName: cleanProjectName,
-                tags: cleanTags,
-                priority: cleanPriority,
-                isFavorite: isFavorite,
-                dueAt: cleanDueAt
-            )
-            newIdea.kindValue = kindRaw
-            modelContext.insert(newIdea)
-        }
-
         do {
-            try modelContext.save()
+            try IdeaSaveService.save(
+                IdeaSaveValues(
+                    title: title,
+                    kindRaw: kindRaw,
+                    status: status,
+                    concept: concept,
+                    rationale: rationale,
+                    approach: approach,
+                    nextAction: nextAction,
+                    projectName: projectName,
+                    tags: Idea.normalizeTags(from: tagsText),
+                    priority: priority,
+                    isFavorite: isFavorite,
+                    dueAt: hasDueDate ? dueAt : nil
+                ),
+                updating: editingIdea,
+                in: modelContext
+            )
             dismiss()
         } catch {
             saveErrorMessage = error.localizedDescription
