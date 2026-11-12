@@ -255,6 +255,10 @@ final class CloudSyncManager: ObservableObject {
 #endif
     }
 
+    func reportLocalSaveFailure(_ error: Error) {
+        state = .failed("復元したカードを端末に保存できませんでした: \(error.localizedDescription)")
+    }
+
     func sync(ideas: [Idea], plan: AppPlan) async -> Date? {
         guard plan.usesCloudStorage else {
             state = .localOnly
