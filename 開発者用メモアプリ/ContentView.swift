@@ -14,12 +14,12 @@ struct ContentView: View {
     @AppStorage("onboarding.didInsertSampleIdeas") private var didInsertSampleIdeas = false
     @StateObject private var purchaseManager = PurchaseManager()
     @StateObject private var cloudSyncManager = CloudSyncManager()
+    @State private var cloudSyncCoordinator = CloudSyncCoordinator()
 
     @AppStorage("billing.currentPlan") private var currentPlanRaw = AppPlan.free.rawValue
     @AppStorage("billing.promotionPlan") private var promotionPlanRaw = ""
     @AppStorage("billing.extraLocalSlots") private var extraLocalSlots = 0
     @AppStorage("billing.redeemedPromotionCodes") private var redeemedPromotionCodesData = ""
-    @AppStorage("cloudSync.lastSuccessfulSyncAt") private var lastSuccessfulCloudSyncAt = 0.0
     @AppStorage(IdeaKindCatalog.storageKey) private var ideaKindOptionsData = ""
     @AppStorage(IdeaGroupCatalog.storageKey) private var ideaGroupOptionsData = ""
     @AppStorage("quickCapture.lastKindRaw") private var quickCaptureKindRaw = IdeaKind.feature.rawValue
@@ -546,10 +546,6 @@ struct ContentView: View {
         max(filteredIdeas.count - searchVisibleCount, 0)
     }
 
-    private var lastSuccessfulCloudSyncDate: Date? {
-        lastSuccessfulCloudSyncAt > 0 ? Date(timeIntervalSince1970: lastSuccessfulCloudSyncAt) : nil
-    }
-
     private var shouldShowUpgradeNudge: Bool {
         guard creationAllowance.allowed else {
             return true
@@ -569,77 +565,14 @@ struct ContentView: View {
         return "今月の残りは\(creationAllowance.remaining)件です。より多く保存するならProを検討できます。"
     }
 
-    private func ideasForCloudSync(upTo cutoff: Date) -> [Idea] {
-        guard let lastSuccessfulCloudSyncDate else {
-            return ideas.filter { $0.updatedAt <= cutoff }
-        }
-        return ideas.filter {
-            $0.updatedAt > lastSuccessfulCloudSyncDate && $0.updatedAt <= cutoff
-        }
-    }
-
     private func performCloudSync() async {
-        let syncCutoff = Date()
-        let changedIdeas = ideasForCloudSync(upTo: syncCutoff)
-
-        guard let cloudRecords = await cloudSyncManager.fetchCloudIdeas(plan: currentPlan) else {
-            return
-        }
-
-        let mergeSummary = mergeCloudRecords(cloudRecords)
-        if mergeSummary.hasChanges {
-            saveContext()
-            refreshDerivedIdeaViews()
-        }
-
-        if await cloudSyncManager.sync(ideas: changedIdeas, plan: currentPlan) != nil {
-            lastSuccessfulCloudSyncAt = syncCutoff.timeIntervalSince1970
-        }
-    }
-
-    private func mergeCloudRecords(_ records: [IdeaCloudRecord]) -> CloudMergeSummary {
-        var existingIdeas = Dictionary(uniqueKeysWithValues: ideas.map { ($0.id.uuidString, $0) })
-        var summary = CloudMergeSummary()
-
-        for record in records {
-            guard let ideaID = UUID(uuidString: record.id) else {
-                summary.skipped += 1
-                continue
-            }
-
-            if let existingIdea = existingIdeas[record.id] {
-                if record.updatedAt > existingIdea.updatedAt {
-                    apply(record, to: existingIdea)
-                    summary.updated += 1
-                } else {
-                    summary.skipped += 1
-                }
-            } else {
-                let idea = Idea(record: record, id: ideaID)
-                modelContext.insert(idea)
-                existingIdeas[record.id] = idea
-                summary.inserted += 1
-            }
-        }
-
-        return summary
-    }
-
-    private func apply(_ record: IdeaCloudRecord, to idea: Idea) {
-        idea.title = record.title.trimmed
-        idea.kindValue = record.kind
-        idea.status = IdeaStatus(rawValue: record.status) ?? .inbox
-        idea.concept = record.concept.trimmed
-        idea.rationale = record.rationale.trimmed
-        idea.approach = record.approach.trimmed
-        idea.nextAction = record.nextAction.trimmed
-        idea.projectName = record.projectName.trimmed
-        idea.tags = Idea.normalizeTags(record.tags)
-        idea.priority = Idea.normalizePriority(record.priority)
-        idea.isFavorite = record.isFavorite
-        idea.dueAt = record.dueAt
-        idea.createdAt = record.createdAt
-        idea.updatedAt = record.updatedAt
+        await cloudSyncCoordinator.sync(
+            localIdeas: { ideas },
+            plan: currentPlan,
+            in: modelContext,
+            cloud: cloudSyncManager,
+            onLocalChanges: refreshDerivedIdeaViews
+        )
     }
 
     private func groupedSections(for ideas: [Idea]) -> [IdeaGroupSection] {
@@ -1107,16 +1040,6 @@ private struct IdeaGroupSection: Identifiable {
     var id: String { name }
 }
 
-private struct CloudMergeSummary {
-    var inserted = 0
-    var updated = 0
-    var skipped = 0
-
-    var hasChanges: Bool {
-        inserted > 0 || updated > 0
-    }
-}
-
 private struct ExportIdeaRecord: Codable {
     let id: String
     let title: String
@@ -1273,29 +1196,6 @@ private extension AppPlan {
         case .plus: return 1
         case .pro: return 2
         }
-    }
-}
-
-private extension Idea {
-    convenience init(record: IdeaCloudRecord, id: UUID) {
-        self.init(
-            id: id,
-            title: record.title,
-            kind: IdeaKind(rawValue: record.kind) ?? .feature,
-            status: IdeaStatus(rawValue: record.status) ?? .inbox,
-            concept: record.concept,
-            rationale: record.rationale,
-            approach: record.approach,
-            nextAction: record.nextAction,
-            projectName: record.projectName,
-            tags: record.tags,
-            priority: record.priority,
-            isFavorite: record.isFavorite,
-            dueAt: record.dueAt,
-            createdAt: record.createdAt,
-            updatedAt: record.updatedAt
-        )
-        kindValue = record.kind
     }
 }
 

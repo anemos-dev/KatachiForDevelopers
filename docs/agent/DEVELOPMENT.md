@@ -9,7 +9,8 @@
 - `Views/Tabs/`にホーム・グループ・保存・検索（検索結果を含む）・設定のViewを配置し、必要な値・Binding・操作クロージャを渡します。
 - `IdeaSaveService.swift`にクイック保存・詳細作成・詳細編集で共通の入力反映とSwiftData保存処理があります。作成制限の確認と成功・失敗の画面表示は呼び出し元が担当します。
 - `Item.swift`にカード、分類、プラン、作成制限、テンプレート、SwiftDataの`Idea`があります。
-- `Monetization.swift`が商品・購入・プロモーション、`CloudSync.swift`がFirebase初期化、認証、同期状態を担当します。
+- `Monetization.swift`が商品・購入・プロモーション、`CloudSync.swift`がFirebase初期化、認証、同期状態とFirestoreへの読み書きを担当します。
+- `CloudSyncCoordinator.swift`が取得・マージ・端末保存・送信の順序と最終成功日時を管理します。競合は既存どおり更新日時が新しい側を採用し、端末保存や送信の失敗時には成功日時を進めません。日時は従来の `cloudSync.lastSuccessfulSyncAt` キーを引き継ぎます。
 - `docs/`は仕様・法務・審査・Webサポート、`firebase/`はルール、`assets/`と`release-assets/`は素材です。
 
 ## コマンド
